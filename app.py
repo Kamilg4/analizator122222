@@ -54,6 +54,13 @@ def main() -> None:
         show_swings = st.checkbox("Pokaż linię swingów", value=True)
         show_pivot_labels = st.checkbox("Pokaż etykiety H/L przy pivotach", value=False)
         show_zone_labels = st.checkbox("Pokaż etykiety stref", value=True)
+        show_crosshair = st.checkbox("Pokaż krzyż kursora", value=True)
+        hover_preview_label = st.radio(
+            "Podgląd po najechaniu kursorem",
+            ["Dane świecy (OHLC)", "Cena pod kursorem"],
+            index=0,
+        )
+        hover_readout_mode = "cursor_price" if hover_preview_label == "Cena pod kursorem" else "candle"
         max_zones_on_chart = st.slider(
             "Maksymalna liczba najlepszych stref na wykresie",
             min_value=0,
@@ -257,6 +264,8 @@ def main() -> None:
         show_pivot_labels=show_pivot_labels,
         show_zone_labels=show_zone_labels,
         max_zones_on_chart=max_zones_on_chart,
+        show_crosshair=show_crosshair,
+        hover_readout_mode=hover_readout_mode,
     )
     st.plotly_chart(fig, use_container_width=True)
 
