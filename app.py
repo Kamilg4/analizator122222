@@ -104,7 +104,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch kursora + pamięć analizy: zmiana trybu odczytu nie czyści już wykresu.")
+    st.caption("Patch kursora + pamięć analizy + źródła danych: GPW aliasy oraz stabilne krypto przez Yahoo Finance.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -124,11 +124,29 @@ def main() -> None:
         if source == "Akcje / ETF":
             ticker = st.text_input("Ticker", "NKE").upper().strip()
             exchange_id = ""
-            st.caption("Przykłady: NKE, TTWO, AAPL, MSFT, ADS.DE, RHM.DE, 11B.WA")
+            st.caption(
+                "Przykłady: NKE, TTWO, AAPL, MSFT, ADS.DE, RHM.DE, 11B.WA, PKN.WA. "
+                "Możesz wpisać ORLEN — aplikacja zamieni to na PKN.WA."
+            )
         else:
             ticker = st.text_input("Para krypto", "BTC/USDT").upper().strip()
-            exchange_id = st.selectbox("Giełda", ["binance", "bybit", "okx"], index=0)
-            st.caption("Przykłady: BTC/USDT, ETH/USDT, SOL/USDT")
+            exchange_id = st.selectbox(
+                "Źródło danych krypto",
+                ["yahoo", "kraken", "coinbase", "binance", "bybit", "okx"],
+                index=0,
+                format_func=lambda value: {
+                    "yahoo": "Yahoo Finance — stabilne na Streamlit Cloud",
+                    "kraken": "Kraken przez CCXT",
+                    "coinbase": "Coinbase przez CCXT",
+                    "binance": "Binance przez CCXT — może być blokowane na hostingu",
+                    "bybit": "Bybit przez CCXT",
+                    "okx": "OKX przez CCXT",
+                }[value],
+            )
+            st.caption(
+                "Domyślnie używaj Yahoo Finance. Wpisy BTC/USDT, ETH/USDT i SOL/USDT "
+                "są automatycznie zamieniane na BTC-USD, ETH-USD i SOL-USD."
+            )
 
         timeframe = st.selectbox("Interwał", ["15m", "1h", "4h", "1d", "1wk"], index=3)
         limit = st.slider("Liczba świec", min_value=100, max_value=5000, value=2500, step=50)
