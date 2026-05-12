@@ -17,12 +17,94 @@ from modules.elliott import detect_elliott_scenario
 from modules.chart import make_chart
 
 
+def _run_full_analysis(
+    source: str,
+    ticker: str,
+    exchange_id: str,
+    timeframe: str,
+    limit: int,
+    pivot_left: int,
+    pivot_right: int,
+    min_move_pct: float,
+    trend_points: int,
+    min_trend_score: float,
+) -> dict:
+    """Wykonuje pełną analizę i zwraca komplet danych do renderowania UI."""
+    df = fetch_ohlcv(source, ticker, exchange_id, timeframe, limit)
+    df = add_indicators(df)
+
+    pivots = detect_pivots(df, left=pivot_left, right=pivot_right)
+    swings = build_swings(pivots, min_move_pct=min_move_pct)
+    trend_scores = calculate_trend_scores(swings, trend_points)
+    trend = determine_trend(swings, points_to_check=trend_points, min_score=min_trend_score)
+
+    ovb_result = calculate_ovb(swings, trend, df.iloc[-1])
+    bos_result = calculate_bos(swings, trend, df.iloc[-1])
+    opposite_structure = check_opposite_structure(swings, trend)
+    trend_change_summary = build_trend_change_summary(ovb_result, bos_result, opposite_structure)
+
+    candle_patterns = detect_recent_candle_patterns(df)
+    rsi_signal = get_rsi_signal(df)
+    rsi_divergence = detect_rsi_divergence(df, swings)
+    elliott = detect_elliott_scenario(swings, trend)
+
+    zones = build_all_zones(df, swings, trend)
+    zones_df = evaluate_zones(zones, df, swings, trend, candle_patterns, rsi_signal, rsi_divergence)
+    top_zones_df = select_top_zones(zones_df, top_n=TOP_ZONES_TO_DISPLAY)
+
+    return {
+        "df": df,
+        "pivots": pivots,
+        "swings": swings,
+        "trend_scores": trend_scores,
+        "trend": trend,
+        "ovb_result": ovb_result,
+        "bos_result": bos_result,
+        "opposite_structure": opposite_structure,
+        "trend_change_summary": trend_change_summary,
+        "candle_patterns": candle_patterns,
+        "rsi_signal": rsi_signal,
+        "rsi_divergence": rsi_divergence,
+        "elliott": elliott,
+        "zones": zones,
+        "zones_df": zones_df,
+        "top_zones_df": top_zones_df,
+    }
+
+
+def _analysis_params_signature(
+    source: str,
+    ticker: str,
+    exchange_id: str,
+    timeframe: str,
+    limit: int,
+    pivot_left: int,
+    pivot_right: int,
+    min_move_pct: float,
+    trend_points: int,
+    min_trend_score: float,
+) -> tuple:
+    """Zapis parametrów, żeby ostrzec użytkownika po ich zmianie bez ponownej analizy."""
+    return (
+        source,
+        ticker,
+        exchange_id,
+        timeframe,
+        int(limit),
+        int(pivot_left),
+        int(pivot_right),
+        float(min_move_pct),
+        int(trend_points),
+        float(min_trend_score),
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="Analizator Tradingowy — FULL", layout="wide")
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch UI kursora: kontrolki trybu odczytu znajdują się bezpośrednio nad wykresem.")
+    st.caption("Patch kursora + pamięć analizy: zmiana trybu odczytu nie czyści już wykresu.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -74,39 +156,74 @@ def main() -> None:
 
         analyze_button = st.button("Analizuj")
 
-    if not analyze_button:
+    current_analysis_params = _analysis_params_signature(
+        source,
+        ticker,
+        exchange_id,
+        timeframe,
+        limit,
+        pivot_left,
+        pivot_right,
+        min_move_pct,
+        trend_points,
+        min_trend_score,
+    )
+
+    if "analysis_payload" not in st.session_state:
+        st.session_state["analysis_payload"] = None
+    if "analysis_params" not in st.session_state:
+        st.session_state["analysis_params"] = None
+
+    if analyze_button:
+        try:
+            with st.spinner("Analizuję wykres i buduję ranking stref..."):
+                st.session_state["analysis_payload"] = _run_full_analysis(
+                    source,
+                    ticker,
+                    exchange_id,
+                    timeframe,
+                    limit,
+                    pivot_left,
+                    pivot_right,
+                    min_move_pct,
+                    trend_points,
+                    min_trend_score,
+                )
+                st.session_state["analysis_params"] = current_analysis_params
+        except Exception as error:
+            st.error(f"Nie udało się wykonać analizy: {error}")
+            st.stop()
+
+    if st.session_state["analysis_payload"] is None:
         st.info("Wybierz ticker i kliknij **Analizuj**.")
         return
 
-    try:
-        df = fetch_ohlcv(source, ticker, exchange_id, timeframe, limit)
-    except Exception as error:
-        st.error(f"Nie udało się pobrać danych: {error}")
-        st.stop()
+    if st.session_state["analysis_params"] != current_analysis_params:
+        st.warning(
+            "Zmieniłeś parametry analizy, ale poniżej nadal pokazuję ostatni policzony wynik. "
+            "Kliknij **Analizuj**, aby przeliczyć wykres dla nowych ustawień."
+        )
+
+    analysis_payload = st.session_state["analysis_payload"]
+    df = analysis_payload["df"]
+    pivots = analysis_payload["pivots"]
+    swings = analysis_payload["swings"]
+    trend_scores = analysis_payload["trend_scores"]
+    trend = analysis_payload["trend"]
+    ovb_result = analysis_payload["ovb_result"]
+    bos_result = analysis_payload["bos_result"]
+    opposite_structure = analysis_payload["opposite_structure"]
+    trend_change_summary = analysis_payload["trend_change_summary"]
+    candle_patterns = analysis_payload["candle_patterns"]
+    rsi_signal = analysis_payload["rsi_signal"]
+    rsi_divergence = analysis_payload["rsi_divergence"]
+    elliott = analysis_payload["elliott"]
+    zones = analysis_payload["zones"]
+    zones_df = analysis_payload["zones_df"]
+    top_zones_df = analysis_payload["top_zones_df"]
 
     if len(df) < 80:
         st.warning("Pobrano mało świec. Zwiększ liczbę świec albo wybierz wyższy interwał.")
-
-    df = add_indicators(df)
-
-    pivots = detect_pivots(df, left=pivot_left, right=pivot_right)
-    swings = build_swings(pivots, min_move_pct=min_move_pct)
-    trend_scores = calculate_trend_scores(swings, trend_points)
-    trend = determine_trend(swings, points_to_check=trend_points, min_score=min_trend_score)
-
-    ovb_result = calculate_ovb(swings, trend, df.iloc[-1])
-    bos_result = calculate_bos(swings, trend, df.iloc[-1])
-    opposite_structure = check_opposite_structure(swings, trend)
-    trend_change_summary = build_trend_change_summary(ovb_result, bos_result, opposite_structure)
-
-    candle_patterns = detect_recent_candle_patterns(df)
-    rsi_signal = get_rsi_signal(df)
-    rsi_divergence = detect_rsi_divergence(df, swings)
-    elliott = detect_elliott_scenario(swings, trend)
-
-    zones = build_all_zones(df, swings, trend)
-    zones_df = evaluate_zones(zones, df, swings, trend, candle_patterns, rsi_signal, rsi_divergence)
-    top_zones_df = select_top_zones(zones_df, top_n=TOP_ZONES_TO_DISPLAY)
 
     # =========================
     # PODSUMOWANIE
