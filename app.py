@@ -12,7 +12,7 @@ from modules.trend import calculate_trend_scores, determine_trend, get_trend_com
 from modules.ovb_bos import calculate_ovb, calculate_bos, check_opposite_structure, build_trend_change_summary
 from modules.patterns import detect_recent_candle_patterns, detect_rsi_divergence, get_rsi_signal
 from modules.zones import build_all_zones
-from modules.evaluation import evaluate_zones, select_top_zones
+from modules.evaluation import evaluate_zones, select_top_zones, select_active_zones, select_strategic_zones
 from modules.elliott import detect_elliott_scenario
 from modules.chart import make_chart
 
@@ -51,6 +51,8 @@ def _run_full_analysis(
     zones = build_all_zones(df, swings, trend)
     zones_df = evaluate_zones(zones, df, swings, trend, candle_patterns, rsi_signal, rsi_divergence)
     top_zones_df = select_top_zones(zones_df, top_n=TOP_ZONES_TO_DISPLAY)
+    active_zones_df = select_active_zones(zones_df, top_n=3)
+    strategic_zones_df = select_strategic_zones(zones_df, top_n=3)
 
     return {
         "df": df,
@@ -69,6 +71,8 @@ def _run_full_analysis(
         "zones": zones,
         "zones_df": zones_df,
         "top_zones_df": top_zones_df,
+        "active_zones_df": active_zones_df,
+        "strategic_zones_df": strategic_zones_df,
     }
 
 
@@ -104,7 +108,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch kursora + pamięć analizy + źródła danych: GPW aliasy oraz stabilne krypto przez Yahoo Finance.")
+    st.caption("Patch jakości stref v5: mniej przypadkowych stref, kody B1/S1 na wykresie, konflikty BUY/SELL i status świeżości stref.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -239,6 +243,8 @@ def main() -> None:
     zones = analysis_payload["zones"]
     zones_df = analysis_payload["zones_df"]
     top_zones_df = analysis_payload["top_zones_df"]
+    active_zones_df = analysis_payload["active_zones_df"]
+    strategic_zones_df = analysis_payload["strategic_zones_df"]
 
     if len(df) < 80:
         st.warning("Pobrano mało świec. Zwiększ liczbę świec albo wybierz wyższy interwał.")
@@ -335,21 +341,26 @@ def main() -> None:
     # =========================
     # STREFY
     # =========================
-    st.subheader("4. Ranking stref wejścia")
+    st.subheader("4. Ranking stref — jakość najpierw")
 
     if top_zones_df.empty:
-        st.warning("Nie wykryto jakościowych stref wejścia.")
+        st.warning("Nie wykryto jakościowych stref wejścia po filtracji.")
     else:
         st.caption(
             f"Pokazuję maksymalnie {TOP_ZONES_TO_DISPLAY} najlepszych, niepowtarzających się stref. "
-            "Pełna lista zostaje w sekcji szczegółów technicznych."
+            "Ranking najpierw ocenia jakość miejsca, a dopiero potem jego bieżącą aktywność."
         )
         display_columns = [
+            "zone_code",
             "direction",
+            "entry_class",
             "type",
             "source",
             "low",
             "high",
+            "freshness",
+            "touch_count",
+            "conflict",
             "status",
             "distance_pct",
             "width_pct",
@@ -363,19 +374,54 @@ def main() -> None:
             "tp",
             "rr",
         ]
-        st.dataframe(top_zones_df[display_columns], use_container_width=True)
+        available_display_columns = [column for column in display_columns if column in top_zones_df.columns]
+        st.dataframe(top_zones_df[available_display_columns], use_container_width=True)
 
         best = top_zones_df.iloc[0]
         st.success(
-            f"Najlepsza strefa według rankingu jakościowego: **{best['direction'].upper()} — {best['type']}** "
+            f"Najlepsza strefa według rankingu jakościowego: **{best['zone_code']} — {best['direction'].upper()} — {best['type']}** "
             f"w zakresie **{best['low']:.4f} - {best['high']:.4f}**, "
             f"quality **{best['quality_score']}**, setup **{best['setup_score']}**, "
-            f"decyzja: **{best['decision']}**."
+            f"status świeżości: **{best['freshness']}**, decyzja: **{best['decision']}**."
         )
 
         with st.expander("Szczegóły najlepszej strefy"):
+            st.write("**Kod na wykresie:**", best["zone_code"])
             st.write("**Opis:**", best["note"])
             st.write("**Powody punktacji:**", best["reasons"])
+            if bool(best.get("conflict", False)):
+                st.warning(best.get("conflict_note", "Strefa nakłada się na przeciwną strefę."))
+
+    if not active_zones_df.empty:
+        with st.expander("Strefy aktywne teraz — cena w środku albo bardzo blisko", expanded=False):
+            active_columns = [
+                "zone_code",
+                "direction",
+                "type",
+                "low",
+                "high",
+                "freshness",
+                "quality_score",
+                "setup_score",
+                "decision",
+            ]
+            st.dataframe(active_zones_df[[column for column in active_columns if column in active_zones_df.columns]], use_container_width=True)
+
+    if not strategic_zones_df.empty:
+        with st.expander("Mocne strefy strategiczne poza bieżącą ceną", expanded=False):
+            strategic_columns = [
+                "zone_code",
+                "direction",
+                "type",
+                "source",
+                "low",
+                "high",
+                "freshness",
+                "distance_pct",
+                "quality_score",
+                "decision",
+            ]
+            st.dataframe(strategic_zones_df[[column for column in strategic_columns if column in strategic_zones_df.columns]], use_container_width=True)
 
     # =========================
     # WYKRES
@@ -402,6 +448,11 @@ def main() -> None:
     hover_readout_mode = "cursor_price" if hover_preview_label == "Cena pod kursorem" else "candle"
     st.caption(
         "Dane świecy (OHLC) pokazują wartości świecy. Cena pod kursorem pokazuje przybliżony poziom osi Y w miejscu kursora."
+    )
+
+    st.caption(
+        "Legenda stref: zielone prostokąty = BUY, czerwone = SELL. Ciemniejszy odcień oznacza wyższą jakość strefy. "
+        "Kody B1/B2/S1/S2 odpowiadają tabeli rankingu. Żółty pas = konflikt, czyli nakładanie się przeciwstawnych stref BUY/SELL."
     )
 
     chart_title = f"{ticker} — {timeframe} — struktura, OVB, BOS i strefy"
