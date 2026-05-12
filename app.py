@@ -22,6 +22,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
+    st.caption("Patch UI kursora: kontrolki trybu odczytu znajdują się bezpośrednio nad wykresem.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -54,13 +55,6 @@ def main() -> None:
         show_swings = st.checkbox("Pokaż linię swingów", value=True)
         show_pivot_labels = st.checkbox("Pokaż etykiety H/L przy pivotach", value=False)
         show_zone_labels = st.checkbox("Pokaż etykiety stref", value=True)
-        show_crosshair = st.checkbox("Pokaż krzyż kursora", value=True)
-        hover_preview_label = st.radio(
-            "Podgląd po najechaniu kursorem",
-            ["Dane świecy (OHLC)", "Cena pod kursorem"],
-            index=0,
-        )
-        hover_readout_mode = "cursor_price" if hover_preview_label == "Cena pod kursorem" else "candle"
         max_zones_on_chart = st.slider(
             "Maksymalna liczba najlepszych stref na wykresie",
             min_value=0,
@@ -252,6 +246,29 @@ def main() -> None:
     # WYKRES
     # =========================
     st.subheader("5. Wykres")
+    st.info("Tryb odczytu kursora jest teraz tutaj — bez przewijania panelu bocznego.")
+
+    chart_controls_left, chart_controls_right = st.columns([2, 1])
+    with chart_controls_left:
+        hover_preview_label = st.radio(
+            "Tryb odczytu na wykresie",
+            ["Dane świecy (OHLC)", "Cena pod kursorem"],
+            index=0,
+            horizontal=True,
+            key="chart_hover_mode_main",
+        )
+    with chart_controls_right:
+        show_crosshair = st.checkbox(
+            "Pokaż krzyż kursora",
+            value=True,
+            key="chart_crosshair_main",
+        )
+
+    hover_readout_mode = "cursor_price" if hover_preview_label == "Cena pod kursorem" else "candle"
+    st.caption(
+        "Dane świecy (OHLC) pokazują wartości świecy. Cena pod kursorem pokazuje przybliżony poziom osi Y w miejscu kursora."
+    )
+
     chart_title = f"{ticker} — {timeframe} — struktura, OVB, BOS i strefy"
     fig = make_chart(
         df,
