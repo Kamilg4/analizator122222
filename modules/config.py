@@ -9,7 +9,7 @@ DEFAULT_RSI_PERIOD = 14
 DEFAULT_ATR_PERIOD = 14
 
 # Wersja patcha
-APP_VERSION = "2026-05-13-v7-fokus-1-glowna-1-alternatywna"
+APP_VERSION = "2026-05-13-v8-widoczne-strefy-i-prosta-tabela"
 
 # Ranking główny — pokazujemy tylko kilka najbardziej użytecznych kandydatów.
 TOP_ZONES_TO_DISPLAY = 5
@@ -29,6 +29,6 @@ READABLE_CHART_MAX_ZONES = 2
 DIAGNOSTIC_CHART_MAX_ZONES = 5
 READABLE_CHART_MAX_OVERLAP_RATIO = 0.12
 
-# W czytelnym widoku nie rysujemy bardzo odległych stref strategicznych.
-# One zostają w tabelach, ale nie powinny zatykać głównego wykresu.
+# Zachowane jako parametr pomocniczy do ewentualnych przyszłych filtrów UI.
+# W wersji v8 czytelny wykres rysuje strefy z rankingu nawet wtedy, gdy są strategiczne i dalekie.
 READABLE_CHART_MAX_DISTANCE_PCT = 18.0
