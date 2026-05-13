@@ -250,6 +250,8 @@ def get_yfinance_params(timeframe: str) -> tuple[str, str]:
         return "1d", "10y"
     if timeframe == "1wk":
         return "1wk", "10y"
+    if timeframe == "1mo":
+        return "1mo", "10y"
 
     raise ValueError(f"Nieobsługiwany interwał: {timeframe}")
 
@@ -279,3 +281,15 @@ def fetch_ohlcv(source: str, ticker: str, exchange_id: str, timeframe: str, limi
         return fetch_crypto_ccxt_ohlcv(exchange_id, ticker, timeframe, limit)
 
     raise ValueError("Nieznane źródło danych.")
+
+
+def get_mtf_timeframe(timeframe: str) -> str | None:
+    """Zwraca wyższy interwał (MTF) dla danego interwału."""
+    mapping = {
+        "15m": "1h",
+        "1h": "4h",
+        "4h": "1d",
+        "1d": "1wk",
+        "1wk": "1mo",
+    }
+    return mapping.get(timeframe)
