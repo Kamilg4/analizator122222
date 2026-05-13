@@ -12,7 +12,7 @@ from modules.config import (
 )
 
 # Importy modułów
-from modules.data import fetch_ohlcv
+from modules.data import fetch_ohlcv, get_mtf_timeframe
 from modules.indicators import add_indicators
 from modules.pivots import detect_pivots, build_swings
 from modules.trend import analyze_trend_structure, get_change_reference_trend, finalize_trend_context
@@ -82,6 +82,17 @@ def _run_full_analysis(
     df = fetch_ohlcv(source, ticker, exchange_id, timeframe, limit)
     df = add_indicators(df)
 
+    # Pobieranie danych MTF
+    mtf_timeframe = get_mtf_timeframe(timeframe)
+    df_mtf = None
+    if mtf_timeframe:
+        try:
+            # Dla MTF pobieramy mniej świec, np. 1000, bo i tak reprezentują bardzo szeroki kontekst
+            df_mtf = fetch_ohlcv(source, ticker, exchange_id, mtf_timeframe, limit=min(limit, 1000))
+            df_mtf = add_indicators(df_mtf)
+        except Exception:
+            df_mtf = None
+
     pivots = detect_pivots(df, left=pivot_left, right=pivot_right)
     swings = build_swings(pivots, min_move_pct=min_move_pct)
     structural_trend_context = analyze_trend_structure(
@@ -107,7 +118,7 @@ def _run_full_analysis(
     rsi_divergence = detect_rsi_divergence(df, swings)
     elliott = detect_elliott_scenario(swings, trend)
 
-    zones = build_all_zones(df, swings, trend)
+    zones = build_all_zones(df, swings, trend, df_mtf=df_mtf)
     zones_df = evaluate_zones(zones, df, swings, trend, candle_patterns, rsi_signal, rsi_divergence)
     top_zones_df = select_top_zones(zones_df, top_n=TOP_ZONES_TO_DISPLAY)
     active_zones_df = select_active_zones(zones_df, top_n=3)
