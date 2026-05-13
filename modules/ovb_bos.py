@@ -192,8 +192,8 @@ def calculate_bos(swings: pd.DataFrame, trend: str, last_candle: pd.Series) -> d
             state = "confirmed"
             status = "BOS POTWIERDZONY — zamknięcie świecy poniżej podstawy ostatniego impulsu wzrostowego."
         elif low < base_price:
-            state = "wick"
-            status = "BOS NARUSZONY KNOTEM — cena naruszyła podstawę impulsu, ale brak zamknięcia poniżej."
+            state = "sweep"
+            status = "LIQUIDITY SWEEP — cena zebrała płynność poniżej podstawy, ale zamknęła się wyżej (fałszywe wybicie)."
         else:
             state = "not_broken"
             status = "BOS BRAK — podstawa ostatniego impulsu wzrostowego nie została wybita."
@@ -203,8 +203,8 @@ def calculate_bos(swings: pd.DataFrame, trend: str, last_candle: pd.Series) -> d
             state = "confirmed"
             status = "BOS POTWIERDZONY — zamknięcie świecy powyżej podstawy ostatniego impulsu spadkowego."
         elif high > base_price:
-            state = "wick"
-            status = "BOS NARUSZONY KNOTEM — cena naruszyła podstawę impulsu, ale brak zamknięcia powyżej."
+            state = "sweep"
+            status = "LIQUIDITY SWEEP — cena zebrała płynność powyżej podstawy, ale zamknęła się niżej (fałszywe wybicie)."
         else:
             state = "not_broken"
             status = "BOS BRAK — podstawa ostatniego impulsu spadkowego nie została wybita."
