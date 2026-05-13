@@ -24,6 +24,48 @@ from modules.elliott import detect_elliott_scenario
 from modules.chart import make_chart
 
 
+def _fmt_num(value: object, decimals: int = 2) -> str:
+    """Bezpieczne formatowanie liczb do prostych tabel użytkowych."""
+    try:
+        return f"{float(value):.{decimals}f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _human_direction(value: object) -> str:
+    direction = str(value).lower()
+    if direction == "buy":
+        return "BUY"
+    if direction == "sell":
+        return "SELL"
+    return str(value)
+
+
+def _compact_zone_table(zones_df: pd.DataFrame) -> pd.DataFrame:
+    """Buduje prostą tabelę decyzyjną bez wewnętrznych metryk algorytmu."""
+    if zones_df is None or zones_df.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    for _, row in zones_df.iterrows():
+        rows.append(
+            {
+                "Kod": row.get("zone_code", "-"),
+                "Kierunek": _human_direction(row.get("direction", "")),
+                "Klasa": row.get("entry_class", "-"),
+                "Strefa": f"{_fmt_num(row.get('low'))} – {_fmt_num(row.get('high'))}",
+                "Wejście": _fmt_num(row.get("entry")),
+                "SL bezp.": _fmt_num(row.get("safe_sl")),
+                "TP": _fmt_num(row.get("tp")),
+                "R:R": _fmt_num(row.get("rr")),
+                "Świeżość": row.get("freshness", "-"),
+                "Decyzja": row.get("decision", "-"),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def _run_full_analysis(
     source: str,
     ticker: str,
@@ -115,7 +157,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch v7: wykres decyzyjny pokazuje domyślnie tylko 1 strefę główną i ewentualnie 1 wyraźnie odseparowaną strefę alternatywną.")
+    st.caption("Patch v8: strefa z głównego rankingu jest zawsze rysowana na wykresie, także gdy jest strategiczna. Główna tabela jest uproszczona do danych naprawdę przydatnych decyzyjnie.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -371,41 +413,17 @@ def main() -> None:
             f"które spełniają warunek R:R około 1:{TARGET_RR:.0f} (tolerancja od {MIN_ACCEPTABLE_RR:.1f}). "
             "Pełna lista, także strefy odrzucone przez R:R, zostaje w sekcji szczegółów technicznych."
         )
-        display_columns = [
-            "zone_code",
-            "direction",
-            "entry_class",
-            "type",
-            "source",
-            "low",
-            "high",
-            "freshness",
-            "touch_count",
-            "conflict",
-            "status",
-            "distance_pct",
-            "width_pct",
-            "quality_score",
-            "setup_score",
-            "score",
-            "decision",
-            "entry",
-            "safe_sl",
-            "aggressive_sl",
-            "tp",
-            "rr",
-            "rr_status",
-        ]
-        available_display_columns = [column for column in display_columns if column in top_zones_df.columns]
-        st.dataframe(top_zones_df[available_display_columns], use_container_width=True)
+        compact_top_table = _compact_zone_table(top_zones_df)
+        st.dataframe(compact_top_table, use_container_width=True, hide_index=True)
+        st.caption("Tabela główna pokazuje tylko dane decyzyjne: gdzie jest strefa, jaki jest plan SL/TP, R:R i czy strefa jest świeża czy zużyta. Metryki techniczne modelu zostawiłem w szczegółach na dole.")
 
         best = top_zones_df.iloc[0]
         st.success(
-            f"Najlepsza strefa według rankingu jakościowego: **{best['zone_code']} — {best['direction'].upper()} — {best['type']}** "
-            f"w zakresie **{best['low']:.4f} - {best['high']:.4f}**, "
-            f"quality **{best['quality_score']}**, setup **{best['setup_score']}**, "
-            f"R:R **{best['rr']:.2f} ({best['rr_status']})**, "
-            f"status świeżości: **{best['freshness']}**, decyzja: **{best['decision']}**."
+            f"Najważniejsza strefa z rankingu: **{best['zone_code']} — {best['direction'].upper()}** "
+            f"w zakresie **{best['low']:.4f} - {best['high']:.4f}**. "
+            f"Plan techniczny: wejście **{best['entry']:.4f}**, bezpieczny SL **{best['safe_sl']:.4f}**, "
+            f"TP **{best['tp']:.4f}**, R:R **{best['rr']:.2f}**. "
+            f"Status: **{best['freshness']}**. Decyzja: **{best['decision']}**."
         )
 
         with st.expander("Szczegóły najlepszej strefy"):
@@ -417,38 +435,11 @@ def main() -> None:
 
     if not active_zones_df.empty:
         with st.expander("Strefy aktywne teraz — cena w środku albo bardzo blisko", expanded=False):
-            active_columns = [
-                "zone_code",
-                "direction",
-                "type",
-                "low",
-                "high",
-                "freshness",
-                "quality_score",
-                "setup_score",
-                "rr",
-                "rr_status",
-                "decision",
-            ]
-            st.dataframe(active_zones_df[[column for column in active_columns if column in active_zones_df.columns]], use_container_width=True)
+            st.dataframe(_compact_zone_table(active_zones_df), use_container_width=True, hide_index=True)
 
     if not strategic_zones_df.empty:
         with st.expander("Mocne strefy strategiczne poza bieżącą ceną", expanded=False):
-            strategic_columns = [
-                "zone_code",
-                "direction",
-                "type",
-                "source",
-                "low",
-                "high",
-                "freshness",
-                "distance_pct",
-                "quality_score",
-                "rr",
-                "rr_status",
-                "decision",
-            ]
-            st.dataframe(strategic_zones_df[[column for column in strategic_columns if column in strategic_zones_df.columns]], use_container_width=True)
+            st.dataframe(_compact_zone_table(strategic_zones_df), use_container_width=True, hide_index=True)
 
     # =========================
     # WYKRES
@@ -481,8 +472,8 @@ def main() -> None:
         chart_zones_df = select_chart_zones(top_zones_df, top_n=READABLE_CHART_MAX_ZONES)
         show_conflict_overlays = False
         st.caption(
-            "Widok czytelny: rysuję jedną strefę główną i tylko wtedy drugą alternatywną, gdy jest wyraźnie odseparowana. "
-            "Pozostałe strefy są analizowane i zostają w tabelach, ale nie zagracają wykresu."
+            "Widok czytelny: rysuję strefę główną z rankingu także wtedy, gdy jest strategiczna i daleko od ceny. "
+            "Drugą strefę dokładam tylko wtedy, gdy daje wyraźnie oddzielny scenariusz. Reszta zostaje w tabelach."
         )
     else:
         chart_zones_df = top_zones_df.head(max_zones_on_chart).copy()
