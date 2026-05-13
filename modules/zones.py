@@ -236,6 +236,8 @@ def build_fvg_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -> list[d
         if float(next_candle["low"]) > float(prev["high"]):
             gap_size = float(next_candle["low"] - prev["high"])
             if gap_size >= atr * 0.10:
+                has_volume = "volume" in df.columns and "volume_ma" in df.columns
+                vol_confirm = has_volume and float(next_candle["volume"]) > float(next_candle["volume_ma"])
                 add_zone(
                     zones,
                     direction="buy",
@@ -243,14 +245,16 @@ def build_fvg_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -> list[d
                     low=float(prev["high"]),
                     high=float(next_candle["low"]),
                     source="FVG",
-                    strength=3,
-                    note="Uproszczony bullish imbalance — potencjalna reakcja przy domknięciu luki.",
+                    strength=4 if vol_confirm else 3,
+                    note=f"Uproszczony bullish imbalance{' (potwierdzony wolumenem)' if vol_confirm else ''} — potencjalna reakcja przy domknięciu luki.",
                 )
 
         # Bearish FVG: luka między low poprzedniej świecy i high następnej.
         if float(next_candle["high"]) < float(prev["low"]):
             gap_size = float(prev["low"] - next_candle["high"])
             if gap_size >= atr * 0.10:
+                has_volume = "volume" in df.columns and "volume_ma" in df.columns
+                vol_confirm = has_volume and float(next_candle["volume"]) > float(next_candle["volume_ma"])
                 add_zone(
                     zones,
                     direction="sell",
@@ -258,8 +262,8 @@ def build_fvg_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -> list[d
                     low=float(next_candle["high"]),
                     high=float(prev["low"]),
                     source="FVG",
-                    strength=3,
-                    note="Uproszczony bearish imbalance — potencjalna reakcja przy domknięciu luki.",
+                    strength=4 if vol_confirm else 3,
+                    note=f"Uproszczony bearish imbalance{' (potwierdzony wolumenem)' if vol_confirm else ''} — potencjalna reakcja przy domknięciu luki.",
                 )
 
     return zones[-20:]
@@ -291,6 +295,10 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
             future_break = float(future["high"].max()) > float(previous["high"].max()) if not previous.empty else False
             future_move = float(future["high"].max() - candle["low"])
             if future_break and future_move >= atr:
+                has_volume = "volume" in df.columns and "volume_ma" in df.columns
+                future_vol_max = float(future["volume"].max()) if has_volume else 0.0
+                candle_vol_ma = float(candle["volume_ma"]) if has_volume else 0.0
+                vol_confirm = has_volume and future_vol_max > candle_vol_ma * 1.3
                 add_zone(
                     zones,
                     direction="buy",
@@ -298,8 +306,8 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
                     low=float(candle["low"]),
                     high=float(candle["high"]),
                     source="OB/LBM",
-                    strength=4,
-                    note="Uproszczony LBM: ostatnia świeca spadkowa przed impulsem wzrostowym.",
+                    strength=6 if vol_confirm else 4,
+                    note=f"Uproszczony LBM: ostatnia świeca spadkowa przed impulsem wzrostowym{' (silne wsparcie wolumenu)' if vol_confirm else ''}.",
                 )
 
         # SELL OB: świeca wzrostowa, po której następuje wyraźny ruch i wybicie lokalnych low.
@@ -307,6 +315,10 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
             future_break = float(future["low"].min()) < float(previous["low"].min()) if not previous.empty else False
             future_move = float(candle["high"] - future["low"].min())
             if future_break and future_move >= atr:
+                has_volume = "volume" in df.columns and "volume_ma" in df.columns
+                future_vol_max = float(future["volume"].max()) if has_volume else 0.0
+                candle_vol_ma = float(candle["volume_ma"]) if has_volume else 0.0
+                vol_confirm = has_volume and future_vol_max > candle_vol_ma * 1.3
                 add_zone(
                     zones,
                     direction="sell",
@@ -314,8 +326,8 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
                     low=float(candle["low"]),
                     high=float(candle["high"]),
                     source="OB/LBM",
-                    strength=4,
-                    note="Uproszczony LBM: ostatnia świeca wzrostowa przed impulsem spadkowym.",
+                    strength=6 if vol_confirm else 4,
+                    note=f"Uproszczony LBM: ostatnia świeca wzrostowa przed impulsem spadkowym{' (silne wsparcie wolumenu)' if vol_confirm else ''}.",
                 )
 
     return zones[-20:]
@@ -675,7 +687,7 @@ def filter_entry_zones_by_width(
     return filtered
 
 
-def build_all_zones(df: pd.DataFrame, swings: pd.DataFrame, trend: str) -> list[dict[str, Any]]:
+def build_all_zones(df: pd.DataFrame, swings: pd.DataFrame, trend: str, df_mtf: pd.DataFrame | None = None) -> list[dict[str, Any]]:
     atr = float(df["atr"].iloc[-1]) if "atr" in df.columns else float((df["high"] - df["low"]).tail(14).mean())
     current_price = float(df["close"].iloc[-1])
 
@@ -688,6 +700,42 @@ def build_all_zones(df: pd.DataFrame, swings: pd.DataFrame, trend: str) -> list[
     zones.extend(build_fvg_zones(df, atr))
     zones.extend(build_order_block_zones(df, atr))
     zones.extend(build_ftr_zones(df, atr))
+
+    if df_mtf is not None and not df_mtf.empty:
+        # Budujemy proste strefy wsparcia/oporu z wykresu MTF i nakładamy z najwyższą wagą
+        from .pivots import detect_pivots, build_swings
+        mtf_pivots = detect_pivots(df_mtf, left=3, right=3)
+        mtf_swings = build_swings(mtf_pivots, min_move_pct=1.0)
+        
+        mtf_atr = float(df_mtf["atr"].iloc[-1]) if "atr" in df_mtf.columns else float((df_mtf["high"] - df_mtf["low"]).tail(14).mean())
+        tolerance = mtf_atr * 0.20
+        
+        recent_mtf_lows = mtf_swings[mtf_swings["type"] == "low"].tail(5)
+        recent_mtf_highs = mtf_swings[mtf_swings["type"] == "high"].tail(5)
+        
+        for row in recent_mtf_lows.itertuples():
+            add_zone(
+                zones,
+                direction="buy",
+                zone_type="Strefa MTF (Wyższy Interwał)",
+                low=float(row.price) - tolerance,
+                high=float(row.price) + tolerance,
+                source="HTF/HIST", # Silne źródło z configu
+                strength=10, # MTF ma najwyższy priorytet
+                note="Kluczowa strefa wsparcia z wyższego interwału czasowego.",
+            )
+            
+        for row in recent_mtf_highs.itertuples():
+            add_zone(
+                zones,
+                direction="sell",
+                zone_type="Strefa MTF (Wyższy Interwał)",
+                low=float(row.price) - tolerance,
+                high=float(row.price) + tolerance,
+                source="HTF/HIST", # Silne źródło z configu
+                strength=10, # MTF ma najwyższy priorytet
+                note="Kluczowa strefa oporu z wyższego interwału czasowego.",
+            )
 
     clustered = cluster_nearby_zones(zones, atr)
 
