@@ -163,9 +163,10 @@ def make_chart(
     show_swings: bool = True,
     show_pivot_labels: bool = False,
     show_zone_labels: bool = True,
-    max_zones_on_chart: int = 8,
+    max_zones_on_chart: int = 2,
     show_crosshair: bool = True,
     hover_readout_mode: str = "candle",
+    show_conflict_overlays: bool = False,
 ) -> go.Figure:
     """
     Tworzy wykres świecowy z OVB, BOS i strefami.
@@ -261,7 +262,7 @@ def make_chart(
     # Rysujemy tylko najlepsze strefy wybrane przez ranking.
     if zones_df is not None and not zones_df.empty and max_zones_on_chart > 0:
         zones_to_plot = zones_df.head(max_zones_on_chart).copy()
-        x0 = df.index[max(0, len(df) - min(len(df), 250))]
+        x0 = df.index[max(0, len(df) - min(len(df), 120))]
         x1 = df.index[-1]
         label_x = df.index[max(0, len(df) - 5)]
 
@@ -293,14 +294,17 @@ def make_chart(
             if show_zone_labels:
                 midpoint = (float(zone["low"]) + float(zone["high"])) / 2
                 direction_label = "BUY" if direction == "buy" else "SELL"
-                conflict_marker = " ⚠" if bool(zone.get("conflict", False)) else ""
+                conflict_marker = " ⚠" if show_conflict_overlays and bool(zone.get("conflict", False)) else ""
+                chart_role = str(zone.get("chart_role", "")).strip()
+                role_prefix = f"{chart_role} " if chart_role else f"{zone_code} "
                 label_groups[direction]["y"].append(midpoint)
                 label_groups[direction]["text"].append(
-                    f"{zone_code} {direction_label}{conflict_marker} | {float(zone['low']):.2f}-{float(zone['high']):.2f}"
+                    f"{role_prefix}{direction_label}{conflict_marker} | {float(zone['low']):.2f}-{float(zone['high']):.2f}"
                 )
                 label_groups[direction]["customdata"].append(
                     [
                         zone_code,
+                        chart_role,
                         direction_label,
                         str(zone.get("source", "")),
                         str(zone.get("type", "")),
@@ -314,7 +318,8 @@ def make_chart(
                     ]
                 )
 
-        _add_conflict_overlays(fig, zones_to_plot, x0, x1)
+        if show_conflict_overlays:
+            _add_conflict_overlays(fig, zones_to_plot, x0, x1)
 
         if show_zone_labels:
             for direction, color in [("buy", "rgba(140, 255, 185, 0.98)"), ("sell", "rgba(255, 170, 170, 0.98)")]:
@@ -333,13 +338,13 @@ def make_chart(
                         textfont={"size": 10, "color": color},
                         customdata=group["customdata"],
                         hovertemplate=(
-                            "<b>%{customdata[0]} — %{customdata[1]} — %{customdata[3]}</b><br>"
-                            "Źródło: %{customdata[2]}<br>"
-                            "Strefa: %{customdata[4]:.4f} – %{customdata[5]:.4f}<br>"
-                            "Quality: %{customdata[6]:.0f} | Setup: %{customdata[7]:.0f}<br>"
-                            "Świeżość: %{customdata[8]}<br>"
-                            "Decyzja: %{customdata[9]}<br>"
-                            "Konflikt: %{customdata[10]}"
+                            "<b>%{customdata[1]} %{customdata[2]} — %{customdata[0]} — %{customdata[4]}</b><br>"
+                            "Źródło: %{customdata[3]}<br>"
+                            "Strefa: %{customdata[5]:.4f} – %{customdata[6]:.4f}<br>"
+                            "Quality: %{customdata[7]:.0f} | Setup: %{customdata[8]:.0f}<br>"
+                            "Świeżość: %{customdata[9]}<br>"
+                            "Decyzja: %{customdata[10]}<br>"
+                            "Konflikt: %{customdata[11]}"
                             "<extra></extra>"
                         ) if standard_hover else None,
                         hoverinfo="all" if standard_hover else "skip",
