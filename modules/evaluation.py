@@ -804,7 +804,7 @@ def select_chart_zones(
     Priorytet czytelności:
     - nie rysujemy zanegowanych stref,
     - nie rysujemy stref bez R:R,
-    - nie rysujemy stref bardzo dalekich od aktualnej ceny,
+    - strefa z głównego rankingu ma być widoczna na wykresie także wtedy, gdy jest strategiczna i daleko od ceny,
     - nie dublujemy zakresów i nie tworzymy "zielonej/czerwonej ściany".
     """
     if zones_df.empty or top_n <= 0:
@@ -814,7 +814,6 @@ def select_chart_zones(
         (zones_df["invalidated"] == False)
         & (zones_df["rr_ok"] == True)
         & (zones_df["entry_class"].isin(["AKTYWNA", "W ZASIĘGU", "STRATEGICZNA"]))
-        & (zones_df["distance_pct"] <= READABLE_CHART_MAX_DISTANCE_PCT)
     ].copy()
 
     if candidates.empty:
