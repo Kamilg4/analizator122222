@@ -2,7 +2,14 @@ import streamlit as st
 import pandas as pd
 
 # Import konfiguracji
-from modules.config import APP_VERSION, TOP_ZONES_TO_DISPLAY
+from modules.config import (
+    APP_VERSION,
+    TOP_ZONES_TO_DISPLAY,
+    MIN_ACCEPTABLE_RR,
+    TARGET_RR,
+    READABLE_CHART_MAX_ZONES,
+    DIAGNOSTIC_CHART_MAX_ZONES,
+)
 
 # Importy modułów
 from modules.data import fetch_ohlcv
@@ -12,7 +19,7 @@ from modules.trend import calculate_trend_scores, determine_trend, get_trend_com
 from modules.ovb_bos import calculate_ovb, calculate_bos, check_opposite_structure, build_trend_change_summary
 from modules.patterns import detect_recent_candle_patterns, detect_rsi_divergence, get_rsi_signal
 from modules.zones import build_all_zones
-from modules.evaluation import evaluate_zones, select_top_zones, select_active_zones, select_strategic_zones
+from modules.evaluation import evaluate_zones, select_top_zones, select_active_zones, select_strategic_zones, select_chart_zones
 from modules.elliott import detect_elliott_scenario
 from modules.chart import make_chart
 
@@ -108,7 +115,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch jakości stref v5: mniej przypadkowych stref, kody B1/S1 na wykresie, konflikty BUY/SELL i status świeżości stref.")
+    st.caption("Patch v7: wykres decyzyjny pokazuje domyślnie tylko 1 strefę główną i ewentualnie 1 wyraźnie odseparowaną strefę alternatywną.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -156,16 +163,29 @@ def main() -> None:
         limit = st.slider("Liczba świec", min_value=100, max_value=5000, value=2500, step=50)
 
         st.subheader("Czytelność wykresu")
+        chart_zone_mode = st.radio(
+            "Tryb stref na wykresie",
+            [
+                "Czytelny — 1 główna + 1 alternatywna",
+                "Diagnostyczny — do 5 stref i konflikty",
+            ],
+            index=0,
+        )
         show_swings = st.checkbox("Pokaż linię swingów", value=True)
         show_pivot_labels = st.checkbox("Pokaż etykiety H/L przy pivotach", value=False)
         show_zone_labels = st.checkbox("Pokaż etykiety stref", value=True)
-        max_zones_on_chart = st.slider(
-            "Maksymalna liczba najlepszych stref na wykresie",
-            min_value=0,
-            max_value=TOP_ZONES_TO_DISPLAY,
-            value=TOP_ZONES_TO_DISPLAY,
-            step=1,
-        )
+
+        if chart_zone_mode.startswith("Diagnostyczny"):
+            max_zones_on_chart = st.slider(
+                "Liczba stref na wykresie w trybie diagnostycznym",
+                min_value=1,
+                max_value=DIAGNOSTIC_CHART_MAX_ZONES,
+                value=DIAGNOSTIC_CHART_MAX_ZONES,
+                step=1,
+            )
+        else:
+            max_zones_on_chart = READABLE_CHART_MAX_ZONES
+            st.caption("Tryb czytelny pokazuje wyłącznie główną strefę decyzyjną oraz — jeśli istnieje — jedną głębszą alternatywę.")
 
         st.subheader("Parametry struktury")
         pivot_left = st.slider("Pivot — świece z lewej", min_value=2, max_value=25, value=3)
@@ -344,11 +364,12 @@ def main() -> None:
     st.subheader("4. Ranking stref — jakość najpierw")
 
     if top_zones_df.empty:
-        st.warning("Nie wykryto jakościowych stref wejścia po filtracji.")
+        st.warning(f"Nie wykryto stref, które jednocześnie mają dobrą jakość i R:R co najmniej ok. 1:{MIN_ACCEPTABLE_RR:.1f}.")
     else:
         st.caption(
-            f"Pokazuję maksymalnie {TOP_ZONES_TO_DISPLAY} najlepszych, niepowtarzających się stref. "
-            "Ranking najpierw ocenia jakość miejsca, a dopiero potem jego bieżącą aktywność."
+            f"Pokazuję maksymalnie {TOP_ZONES_TO_DISPLAY} najlepszych, niepowtarzających się stref, "
+            f"które spełniają warunek R:R około 1:{TARGET_RR:.0f} (tolerancja od {MIN_ACCEPTABLE_RR:.1f}). "
+            "Pełna lista, także strefy odrzucone przez R:R, zostaje w sekcji szczegółów technicznych."
         )
         display_columns = [
             "zone_code",
@@ -373,6 +394,7 @@ def main() -> None:
             "aggressive_sl",
             "tp",
             "rr",
+            "rr_status",
         ]
         available_display_columns = [column for column in display_columns if column in top_zones_df.columns]
         st.dataframe(top_zones_df[available_display_columns], use_container_width=True)
@@ -382,6 +404,7 @@ def main() -> None:
             f"Najlepsza strefa według rankingu jakościowego: **{best['zone_code']} — {best['direction'].upper()} — {best['type']}** "
             f"w zakresie **{best['low']:.4f} - {best['high']:.4f}**, "
             f"quality **{best['quality_score']}**, setup **{best['setup_score']}**, "
+            f"R:R **{best['rr']:.2f} ({best['rr_status']})**, "
             f"status świeżości: **{best['freshness']}**, decyzja: **{best['decision']}**."
         )
 
@@ -403,6 +426,8 @@ def main() -> None:
                 "freshness",
                 "quality_score",
                 "setup_score",
+                "rr",
+                "rr_status",
                 "decision",
             ]
             st.dataframe(active_zones_df[[column for column in active_columns if column in active_zones_df.columns]], use_container_width=True)
@@ -419,6 +444,8 @@ def main() -> None:
                 "freshness",
                 "distance_pct",
                 "quality_score",
+                "rr",
+                "rr_status",
                 "decision",
             ]
             st.dataframe(strategic_zones_df[[column for column in strategic_columns if column in strategic_zones_df.columns]], use_container_width=True)
@@ -450,9 +477,24 @@ def main() -> None:
         "Dane świecy (OHLC) pokazują wartości świecy. Cena pod kursorem pokazuje przybliżony poziom osi Y w miejscu kursora."
     )
 
+    if chart_zone_mode.startswith("Czytelny"):
+        chart_zones_df = select_chart_zones(top_zones_df, top_n=READABLE_CHART_MAX_ZONES)
+        show_conflict_overlays = False
+        st.caption(
+            "Widok czytelny: rysuję jedną strefę główną i tylko wtedy drugą alternatywną, gdy jest wyraźnie odseparowana. "
+            "Pozostałe strefy są analizowane i zostają w tabelach, ale nie zagracają wykresu."
+        )
+    else:
+        chart_zones_df = top_zones_df.head(max_zones_on_chart).copy()
+        show_conflict_overlays = True
+        st.caption(
+            "Widok diagnostyczny: pokazuję więcej stref oraz konflikty BUY/SELL. Używaj go do weryfikacji, nie jako domyślnego widoku."
+        )
+
     st.caption(
-        "Legenda stref: zielone prostokąty = BUY, czerwone = SELL. Ciemniejszy odcień oznacza wyższą jakość strefy. "
-        "Kody B1/B2/S1/S2 odpowiadają tabeli rankingu. Żółty pas = konflikt, czyli nakładanie się przeciwstawnych stref BUY/SELL."
+        "Legenda: zielony prostokąt = BUY, czerwony = SELL. W widoku czytelnym etykieta GŁÓWNA wskazuje główną strefę decyzyjną, "
+        "a ALTERNATYWNA — drugi, wyraźnie oddzielony scenariusz. W trybie diagnostycznym żółty pas oznacza konflikt BUY/SELL. "
+        "Kody B1/B2/S1/S2 nadal odpowiadają tabeli rankingu."
     )
 
     chart_title = f"{ticker} — {timeframe} — struktura, OVB, BOS i strefy"
@@ -461,7 +503,7 @@ def main() -> None:
         swings,
         ovb_result,
         bos_result,
-        top_zones_df,
+        chart_zones_df,
         chart_title,
         show_swings=show_swings,
         show_pivot_labels=show_pivot_labels,
@@ -469,6 +511,7 @@ def main() -> None:
         max_zones_on_chart=max_zones_on_chart,
         show_crosshair=show_crosshair,
         hover_readout_mode=hover_readout_mode,
+        show_conflict_overlays=show_conflict_overlays,
     )
     st.plotly_chart(fig, use_container_width=True)
 
