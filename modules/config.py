@@ -9,7 +9,7 @@ DEFAULT_RSI_PERIOD = 14
 DEFAULT_ATR_PERIOD = 14
 
 # Wersja patcha
-APP_VERSION = "2026-05-13-v8-widoczne-strefy-i-prosta-tabela"
+APP_VERSION = "2026-05-13-v9-trend-glowny-lokalny-i-filtr-korekty"
 
 # Ranking główny — pokazujemy tylko kilka najbardziej użytecznych kandydatów.
 TOP_ZONES_TO_DISPLAY = 5
