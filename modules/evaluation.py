@@ -6,6 +6,12 @@ import pandas as pd
 import numpy as np
 
 from .zones import zone_mid
+from .config import (
+    MIN_ACCEPTABLE_RR,
+    TARGET_RR,
+    READABLE_CHART_MAX_OVERLAP_RATIO,
+    READABLE_CHART_MAX_DISTANCE_PCT,
+)
 
 
 # =========================================================
@@ -191,7 +197,16 @@ def analyze_zone_history(df: pd.DataFrame, zone: dict[str, Any]) -> dict[str, An
 # =========================================================
 
 def find_take_profit(entry: float, direction: str, swings: pd.DataFrame, safe_sl: float) -> float:
-    """Szuka TP na najbliższym przeciwnym swingu. Gdy brak, używa RR 2:1."""
+    """
+    Szuka konserwatywnego TP na najbliższym przeciwnym swingu cenowym.
+
+    Poprzednio wybieraliśmy ostatni pivot w czasie, co potrafiło dawać zbyt odległy TP
+    i sztucznie pompować R:R. Teraz wybieramy najbliższą sensowną przeszkodę cenową:
+    - BUY: najniższy ważny szczyt powyżej wejścia,
+    - SELL: najwyższy ważny dołek poniżej wejścia.
+
+    Gdy takiego swingu nie ma, zostaje awaryjny target 2R.
+    """
     risk = abs(entry - safe_sl)
     if risk <= 0:
         return entry
@@ -199,13 +214,15 @@ def find_take_profit(entry: float, direction: str, swings: pd.DataFrame, safe_sl
     if direction == "buy":
         highs_above = swings[(swings["type"] == "high") & (swings["price"] > entry)]
         if not highs_above.empty:
-            return float(highs_above.iloc[-1]["price"])
-        return entry + risk * 2
+            nearest_high = highs_above.sort_values("price", ascending=True).iloc[0]
+            return float(nearest_high["price"])
+        return entry + risk * TARGET_RR
 
     lows_below = swings[(swings["type"] == "low") & (swings["price"] < entry)]
     if not lows_below.empty:
-        return float(lows_below.iloc[-1]["price"])
-    return entry - risk * 2
+        nearest_low = lows_below.sort_values("price", ascending=False).iloc[0]
+        return float(nearest_low["price"])
+    return entry - risk * TARGET_RR
 
 
 def calculate_trade_levels(zone: dict[str, Any], current_price: float, atr: float, swings: pd.DataFrame) -> dict[str, float]:
@@ -231,12 +248,22 @@ def calculate_trade_levels(zone: dict[str, Any], current_price: float, atr: floa
 
     rr = reward / risk if risk > 0 else 0.0
 
+    rr_ok = rr >= MIN_ACCEPTABLE_RR
+    if rr >= TARGET_RR:
+        rr_status = "SPEŁNIA ~1:2"
+    elif rr_ok:
+        rr_status = "BLISKO 1:2 — TOLERANCJA"
+    else:
+        rr_status = "ZA SŁABE R:R"
+
     return {
         "entry": float(entry),
         "safe_sl": float(safe_sl),
         "aggressive_sl": float(aggressive_sl),
         "tp": float(tp),
         "rr": float(rr),
+        "rr_ok": bool(rr_ok),
+        "rr_status": rr_status,
     }
 
 
@@ -444,35 +471,49 @@ def score_zone(
 
         rr = float(trade_levels.get("rr", 0.0))
         if rr >= 3:
+            setup_score += 3
+            reasons.append("R:R >= 3 przy aktywnej strefie: setup +3.")
+        elif rr >= TARGET_RR:
             setup_score += 2
-            reasons.append("R:R >= 3 przy aktywnej strefie: setup +2.")
-        elif rr >= 1.3:
+            reasons.append("R:R spełnia warunek ok. 1:2: setup +2.")
+        elif rr >= MIN_ACCEPTABLE_RR:
             setup_score += 1
-            reasons.append("R:R >= 1.3 przy aktywnej strefie: setup +1.")
+            reasons.append("R:R jest blisko 1:2 i mieści się w tolerancji: setup +1.")
+        else:
+            setup_score -= 4
+            reasons.append(f"R:R {rr:.2f} poniżej wymaganego ~1:2: setup -4.")
 
     score = quality_score + setup_score
+    rr = float(trade_levels.get("rr", 0.0))
+    rr_ok = bool(trade_levels.get("rr_ok", False))
+    rr_status = str(trade_levels.get("rr_status", "BRAK"))
 
     # Klasa strefy: oddzielamy jakość od "czy jest teraz w cenie".
+    # Dodatkowo strefa nie jest traktowana jako sensowny trade, jeżeli R:R nie daje
+    # mniej więcej 1:2. Pozostaje w pełnej tabeli, ale nie powinna wejść do głównego rankingu.
     if invalidated:
         entry_class = "ODRZUCONA"
         decision = "ZANEGOWANA — nie używaj jako aktualnej strefy wejścia"
     elif quality_score < 14:
         entry_class = "ODRZUCONA"
         decision = "NISKI PRIORYTET / ZA SŁABA"
+    elif not rr_ok:
+        entry_class = "OBSERWACJA"
+        decision = f"R:R {rr:.2f} jest słabsze niż ~1:2 — tylko obserwacja, nie setup wejścia"
     elif status["in_zone"] or status["near"]:
         entry_class = "AKTYWNA"
         if quality_score >= 28:
-            decision = "MOCNA STREFA + AKTYWNA — szukaj potwierdzenia"
+            decision = "MOCNA STREFA + AKTYWNA + R:R ~1:2 — szukaj potwierdzenia"
         elif quality_score >= 20:
-            decision = "DOBRA STREFA I CENA BLISKO — obserwuj sygnał"
+            decision = "DOBRA STREFA, CENA BLISKO I R:R OK — obserwuj sygnał"
         else:
-            decision = "AKTYWNA, ALE JAKOŚĆ ŚREDNIA — sprawdź ręcznie"
+            decision = "AKTYWNA, R:R OK, ALE JAKOŚĆ ŚREDNIA — sprawdź ręcznie"
     elif distance_pct <= 20:
         entry_class = "W ZASIĘGU"
-        decision = "DOBRA STREFA W ZASIĘGU — obserwuj"
+        decision = "DOBRA STREFA W ZASIĘGU + R:R OK — obserwuj"
     else:
         entry_class = "STRATEGICZNA"
-        decision = "MOCNA STREFA STRATEGICZNA — poza bieżącą ceną"
+        decision = "MOCNA STREFA STRATEGICZNA + R:R OK — poza bieżącą ceną"
 
     return {
         "score": int(score),
@@ -490,6 +531,8 @@ def score_zone(
         "sources_count": len(sources),
         "strong_sources_count": len(strong_sources),
         "has_local_confirmation": has_local_confirmation,
+        "rr_ok": rr_ok,
+        "rr_status": rr_status,
         "reasons": reasons,
     }
 
@@ -601,6 +644,8 @@ def evaluate_zones(
                 "aggressive_sl": levels["aggressive_sl"],
                 "tp": levels["tp"],
                 "rr": levels["rr"],
+                "rr_ok": score_data["rr_ok"],
+                "rr_status": score_data["rr_status"],
                 "note": zone.get("note", ""),
                 "reasons": " | ".join(score_data["reasons"]),
                 "meta": zone.get("meta", {}),
@@ -616,6 +661,7 @@ def evaluate_zones(
         "AKTYWNA": 0,
         "W ZASIĘGU": 1,
         "STRATEGICZNA": 2,
+        "OBSERWACJA": 8,
         "ODRZUCONA": 9,
     }
     result["entry_class_priority"] = result["entry_class"].map(class_priority).fillna(9).astype(int)
@@ -665,13 +711,16 @@ def select_top_zones(zones_df: pd.DataFrame, top_n: int = 5, max_overlap_ratio: 
         return _assign_zone_codes(zones_df.head(0).copy())
 
     candidates = zones_df[
-        (zones_df["entry_class"] != "ODRZUCONA")
+        (zones_df["entry_class"].isin(["AKTYWNA", "W ZASIĘGU", "STRATEGICZNA"]))
         & (zones_df["invalidated"] == False)
+        & (zones_df["rr_ok"] == True)
         & (zones_df["quality_score"] >= 16)
     ].copy()
 
+    # Jeżeli rynek nie daje stref z akceptowalnym R:R, lepiej zwrócić pusty ranking
+    # niż udawać, że mamy dobry trade. Pełna tabela nadal pokaże strefy obserwacyjne.
     if candidates.empty:
-        candidates = zones_df[zones_df["invalidated"] == False].copy()
+        return _assign_zone_codes(zones_df.head(0).copy())
 
     selected_indexes: list[int] = []
 
@@ -704,6 +753,7 @@ def select_active_zones(zones_df: pd.DataFrame, top_n: int = 3) -> pd.DataFrame:
     active = zones_df[
         (zones_df["entry_class"] == "AKTYWNA")
         & (zones_df["invalidated"] == False)
+        & (zones_df["rr_ok"] == True)
         & (zones_df["quality_score"] >= 16)
     ].copy()
 
@@ -723,6 +773,7 @@ def select_strategic_zones(zones_df: pd.DataFrame, top_n: int = 3) -> pd.DataFra
     strategic = zones_df[
         (zones_df["entry_class"] == "STRATEGICZNA")
         & (zones_df["invalidated"] == False)
+        & (zones_df["rr_ok"] == True)
         & (zones_df["quality_score"] >= 18)
     ].copy()
 
@@ -732,3 +783,87 @@ def select_strategic_zones(zones_df: pd.DataFrame, top_n: int = 3) -> pd.DataFra
     ).head(top_n)
 
     return _assign_zone_codes(strategic.reset_index(drop=True))
+
+
+def select_chart_zones(
+    zones_df: pd.DataFrame,
+    top_n: int = 2,
+    max_overlap_ratio: float = READABLE_CHART_MAX_OVERLAP_RATIO,
+) -> pd.DataFrame:
+    """
+    Wybiera minimalny zestaw stref do głównego, czytelnego wykresu.
+
+    Zasada projektowa:
+    - wykres ma odpowiadać na pytanie: "gdzie jest główny poziom decyzyjny?",
+      a nie rysować każdą sensowną strefę z całej analizy,
+    - pokazujemy maksymalnie 2 strefy:
+        1) GŁÓWNA — najlepsza praktyczna strefa z rankingu,
+        2) ALTERNATYWNA — wyraźnie odseparowany głębszy scenariusz w tym samym kierunku,
+           jeśli taki istnieje.
+
+    Priorytet czytelności:
+    - nie rysujemy zanegowanych stref,
+    - nie rysujemy stref bez R:R,
+    - nie rysujemy stref bardzo dalekich od aktualnej ceny,
+    - nie dublujemy zakresów i nie tworzymy "zielonej/czerwonej ściany".
+    """
+    if zones_df.empty or top_n <= 0:
+        return _assign_zone_codes(zones_df.head(0).copy())
+
+    candidates = zones_df[
+        (zones_df["invalidated"] == False)
+        & (zones_df["rr_ok"] == True)
+        & (zones_df["entry_class"].isin(["AKTYWNA", "W ZASIĘGU", "STRATEGICZNA"]))
+        & (zones_df["distance_pct"] <= READABLE_CHART_MAX_DISTANCE_PCT)
+    ].copy()
+
+    if candidates.empty:
+        return _assign_zone_codes(zones_df.head(0).copy())
+
+    # 1) Główna strefa — bierzemy pierwszą z rankingu po filtrach praktyczności.
+    primary = candidates.iloc[0].copy()
+    selected_rows: list[pd.Series] = [primary]
+
+    # 2) Alternatywa — preferujemy ten sam kierunek i strefę wyraźnie odseparowaną.
+    primary_direction = str(primary.get("direction", "")).lower()
+    primary_low = float(primary["low"])
+    primary_high = float(primary["high"])
+
+    def _is_clear_alternative(candidate: pd.Series) -> bool:
+        candidate_dict = candidate.to_dict()
+        primary_dict = primary.to_dict()
+        overlap = zone_overlap_ratio(candidate_dict, primary_dict)
+        if overlap >= max_overlap_ratio:
+            return False
+
+        direction = str(candidate.get("direction", "")).lower()
+        low = float(candidate["low"])
+        high = float(candidate["high"])
+
+        # Przy BUY interesuje nas głębsza, niżej położona alternatywa.
+        if primary_direction == "buy" and direction == "buy":
+            return high < primary_low
+
+        # Przy SELL interesuje nas wyższa, dalej położona alternatywa.
+        if primary_direction == "sell" and direction == "sell":
+            return low > primary_high
+
+        return False
+
+    for _, candidate in candidates.iloc[1:].iterrows():
+        if _is_clear_alternative(candidate):
+            selected_rows.append(candidate.copy())
+            break
+
+    # Jeżeli nie ma logicznej alternatywy w tym samym kierunku, nie dokładamy nic na siłę.
+    selected = pd.DataFrame(selected_rows).reset_index(drop=True)
+    if "zone_code" not in selected.columns:
+        selected = _assign_zone_codes(selected)
+
+    chart_roles = ["GŁÓWNA"]
+    if len(selected) >= 2:
+        chart_roles.append("ALTERNATYWNA")
+    selected.insert(1, "chart_role", chart_roles)
+
+    return selected.head(top_n).reset_index(drop=True)
+
