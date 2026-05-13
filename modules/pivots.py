@@ -28,32 +28,26 @@ def detect_pivots(df: pd.DataFrame, left: int, right: int) -> pd.DataFrame:
     is_pivot_low.iloc[:left] = False
     is_pivot_low.iloc[len(df) - right :] = False
 
-    pivot_rows = []
+    high_pivots = pd.DataFrame({
+        "idx": [df.index.get_loc(t) for t in df.index[is_pivot_high]],
+        "time": df.index[is_pivot_high],
+        "type": "high",
+        "price": df.loc[is_pivot_high, "high"].astype(float)
+    })
+    
+    low_pivots = pd.DataFrame({
+        "idx": [df.index.get_loc(t) for t in df.index[is_pivot_low]],
+        "time": df.index[is_pivot_low],
+        "type": "low",
+        "price": df.loc[is_pivot_low, "low"].astype(float)
+    })
 
-    for time in df.index[is_pivot_high]:
-        pivot_rows.append(
-            {
-                "idx": int(df.index.get_loc(time)),
-                "time": time,
-                "type": "high",
-                "price": float(df.loc[time, "high"]),
-            }
-        )
-
-    for time in df.index[is_pivot_low]:
-        pivot_rows.append(
-            {
-                "idx": int(df.index.get_loc(time)),
-                "time": time,
-                "type": "low",
-                "price": float(df.loc[time, "low"]),
-            }
-        )
-
-    if not pivot_rows:
+    pivot_df = pd.concat([high_pivots, low_pivots]).sort_values("idx").reset_index(drop=True)
+    
+    if pivot_df.empty:
         return pd.DataFrame(columns=["idx", "time", "type", "price"])
 
-    return pd.DataFrame(pivot_rows).sort_values("idx").reset_index(drop=True)
+    return pivot_df
 
 
 def build_swings(pivots: pd.DataFrame, min_move_pct: float) -> pd.DataFrame:
@@ -66,8 +60,13 @@ def build_swings(pivots: pd.DataFrame, min_move_pct: float) -> pd.DataFrame:
 
     swings = []
 
-    for _, pivot in pivots.iterrows():
-        pivot_data = pivot.to_dict()
+    for row in pivots.itertuples(index=False):
+        pivot_data = {
+            "idx": row.idx,
+            "time": row.time,
+            "type": row.type,
+            "price": row.price
+        }
 
         if not swings:
             swings.append(pivot_data)
