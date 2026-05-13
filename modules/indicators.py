@@ -4,10 +4,12 @@ from .config import DEFAULT_RSI_PERIOD, DEFAULT_ATR_PERIOD
 
 
 def add_indicators(df: pd.DataFrame, rsi_period: int = DEFAULT_RSI_PERIOD, atr_period: int = DEFAULT_ATR_PERIOD) -> pd.DataFrame:
-    """Dodaje RSI i ATR do danych."""
+    """Dodaje RSI, ATR oraz średnią wolumenu do danych."""
     result = df.copy()
     result["rsi"] = calculate_rsi(result["close"], period=rsi_period)
     result["atr"] = calculate_atr(result, period=atr_period)
+    if "volume" in result.columns:
+        result["volume_ma"] = result["volume"].rolling(20).mean().bfill()
     return result
 
 
