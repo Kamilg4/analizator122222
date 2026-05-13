@@ -15,7 +15,7 @@ from modules.config import (
 from modules.data import fetch_ohlcv
 from modules.indicators import add_indicators
 from modules.pivots import detect_pivots, build_swings
-from modules.trend import calculate_trend_scores, determine_trend, get_trend_comment
+from modules.trend import analyze_trend_structure, get_change_reference_trend, finalize_trend_context
 from modules.ovb_bos import calculate_ovb, calculate_bos, check_opposite_structure, build_trend_change_summary
 from modules.patterns import detect_recent_candle_patterns, detect_rsi_divergence, get_rsi_signal
 from modules.zones import build_all_zones
@@ -84,13 +84,23 @@ def _run_full_analysis(
 
     pivots = detect_pivots(df, left=pivot_left, right=pivot_right)
     swings = build_swings(pivots, min_move_pct=min_move_pct)
-    trend_scores = calculate_trend_scores(swings, trend_points)
-    trend = determine_trend(swings, points_to_check=trend_points, min_score=min_trend_score)
+    structural_trend_context = analyze_trend_structure(
+        swings,
+        local_points_to_check=trend_points,
+        min_score=min_trend_score,
+    )
+    change_reference_trend = get_change_reference_trend(structural_trend_context)
 
-    ovb_result = calculate_ovb(swings, trend, df.iloc[-1])
-    bos_result = calculate_bos(swings, trend, df.iloc[-1])
-    opposite_structure = check_opposite_structure(swings, trend)
+    # OVB/BOS/3x zmiana trendu są liczone względem trendu głównego,
+    # a nie automatycznie względem ostatniego lokalnego odbicia.
+    ovb_result = calculate_ovb(swings, change_reference_trend, df.iloc[-1])
+    bos_result = calculate_bos(swings, change_reference_trend, df.iloc[-1])
+    opposite_structure = check_opposite_structure(swings, change_reference_trend)
     trend_change_summary = build_trend_change_summary(ovb_result, bos_result, opposite_structure)
+
+    trend_context = finalize_trend_context(structural_trend_context, trend_change_summary)
+    trend = trend_context["effective_trend"]
+    trend_scores = trend_context["local_scores"]
 
     candle_patterns = detect_recent_candle_patterns(df)
     rsi_signal = get_rsi_signal(df)
@@ -108,6 +118,8 @@ def _run_full_analysis(
         "pivots": pivots,
         "swings": swings,
         "trend_scores": trend_scores,
+        "trend_context": trend_context,
+        "change_reference_trend": change_reference_trend,
         "trend": trend,
         "ovb_result": ovb_result,
         "bos_result": bos_result,
@@ -157,7 +169,7 @@ def main() -> None:
 
     st.title("Analizator Tradingowy — FULL PROTOTYPE")
     st.caption(f"Wersja kodu: {APP_VERSION}")
-    st.caption("Patch v8: strefa z głównego rankingu jest zawsze rysowana na wykresie, także gdy jest strategiczna. Główna tabela jest uproszczona do danych naprawdę przydatnych decyzyjnie.")
+    st.caption("Patch v9: trend jest rozdzielony na główny i lokalny. Lokalne odbicie przeciw szerszemu trendowi nie zmienia już automatycznie kierunku bez potwierdzeń 3x zmiany trendu.")
     st.write(
         "Pełny prototyp: dane, pivoty, swingi, trend, OVB, BOS, 3x zmiana trendu, "
         "RSI, formacje świecowe, Fibo, 1:1, OB/LBM, FTR, FVG, strefy, SL/TP/R:R i prosty scenariusz Elliotta."
@@ -293,6 +305,8 @@ def main() -> None:
     pivots = analysis_payload["pivots"]
     swings = analysis_payload["swings"]
     trend_scores = analysis_payload["trend_scores"]
+    trend_context = analysis_payload["trend_context"]
+    change_reference_trend = analysis_payload["change_reference_trend"]
     trend = analysis_payload["trend"]
     ovb_result = analysis_payload["ovb_result"]
     bos_result = analysis_payload["bos_result"]
@@ -325,7 +339,7 @@ def main() -> None:
         st.metric("Interwał", timeframe)
 
     with col3:
-        st.metric("Trend", trend)
+        st.metric("Trend decyzyjny", trend)
 
     with col4:
         st.metric("Ostatnia cena", f"{df['close'].iloc[-1]:.4f}")
@@ -333,17 +347,27 @@ def main() -> None:
     with col5:
         st.metric("RSI", f"{df['rsi'].iloc[-1]:.1f}")
 
-    st.write("**Komentarz do trendu:**", get_trend_comment(trend, trend_scores, min_trend_score))
+    st.write("**Trend główny:**", trend_context.get("major_trend", "nieczytelny"))
+    st.write("**Trend lokalny:**", trend_context.get("local_trend", "nieczytelny"))
+    st.write("**Interpretacja trendu:**", trend_context.get("status", "Brak opisu trendu."))
+    if trend_context.get("countertrend_hint"):
+        st.info(trend_context["countertrend_hint"])
     st.write("**RSI:**", rsi_signal["status"])
     st.write("**Formacje świecowe:**", candle_patterns["summary"])
     st.write("**Dywergencja RSI:**", rsi_divergence["status"])
 
-    if trend_scores.get("available"):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Wynik wzrostowy", f"{trend_scores['up_score'] * 100:.0f}%")
-        with col2:
-            st.metric("Wynik spadkowy", f"{trend_scores['down_score'] * 100:.0f}%")
+    local_scores = trend_context.get("local_scores", {})
+    major_scores = trend_context.get("major_scores", {})
+    if local_scores.get("available") or major_scores.get("available"):
+        score_cols = st.columns(4)
+        with score_cols[0]:
+            st.metric("Główny ↑", f"{major_scores.get('up_score', 0.0) * 100:.0f}%")
+        with score_cols[1]:
+            st.metric("Główny ↓", f"{major_scores.get('down_score', 0.0) * 100:.0f}%")
+        with score_cols[2]:
+            st.metric("Lokalny ↑", f"{local_scores.get('up_score', 0.0) * 100:.0f}%")
+        with score_cols[3]:
+            st.metric("Lokalny ↓", f"{local_scores.get('down_score', 0.0) * 100:.0f}%")
 
     # =========================
     # OVB / BOS / 3X ZMIANA
@@ -364,6 +388,7 @@ def main() -> None:
     with col4:
         st.metric("Nowa struktura", "TAK" if trend_change_summary["new_structure_confirmed"] else "NIE")
 
+    st.write("**Trend odniesienia dla OVB/BOS:**", change_reference_trend)
     st.write("**Wniosek:**", trend_change_summary["status"])
 
     if ovb_result.get("available"):
@@ -510,7 +535,7 @@ def main() -> None:
     # SZCZEGÓŁY TECHNICZNE
     # =========================
     with st.expander("Szczegóły: ocena trendu"):
-        st.json(trend_scores, expanded=True)
+        st.json(trend_context, expanded=True)
 
     with st.expander("Szczegóły: OVB"):
         st.json(ovb_result, expanded=False)
