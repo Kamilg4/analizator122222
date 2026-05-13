@@ -198,14 +198,9 @@ def analyze_zone_history(df: pd.DataFrame, zone: dict[str, Any]) -> dict[str, An
 
 def find_take_profit(entry: float, direction: str, swings: pd.DataFrame, safe_sl: float) -> float:
     """
-    Szuka konserwatywnego TP na najbliższym przeciwnym swingu cenowym.
-
-    Poprzednio wybieraliśmy ostatni pivot w czasie, co potrafiło dawać zbyt odległy TP
-    i sztucznie pompować R:R. Teraz wybieramy najbliższą sensowną przeszkodę cenową:
-    - BUY: najniższy ważny szczyt powyżej wejścia,
-    - SELL: najwyższy ważny dołek poniżej wejścia.
-
-    Gdy takiego swingu nie ma, zostaje awaryjny target 2R.
+    Szuka konserwatywnego TP na najbliższym przeciwnym swingu cenowym, 
+    który spełnia minimalne R:R. Jeśli żaden nie spełnia, lub nie ma swingów, 
+    używa matematycznych przedłużeń (Fibo extensions / docelowe R:R).
     """
     risk = abs(entry - safe_sl)
     if risk <= 0:
@@ -214,15 +209,21 @@ def find_take_profit(entry: float, direction: str, swings: pd.DataFrame, safe_sl
     if direction == "buy":
         highs_above = swings[(swings["type"] == "high") & (swings["price"] > entry)]
         if not highs_above.empty:
-            nearest_high = highs_above.sort_values("price", ascending=True).iloc[0]
-            return float(nearest_high["price"])
-        return entry + risk * TARGET_RR
+            for _, high in highs_above.sort_values("price", ascending=True).iterrows():
+                tp = float(high["price"])
+                if (tp - entry) / risk >= MIN_ACCEPTABLE_RR:
+                    return tp
+        # Dynamiczne TP (Fibo/RR extension) jeśli brakuje struktury
+        return entry + risk * max(TARGET_RR, 1.618)
 
     lows_below = swings[(swings["type"] == "low") & (swings["price"] < entry)]
     if not lows_below.empty:
-        nearest_low = lows_below.sort_values("price", ascending=False).iloc[0]
-        return float(nearest_low["price"])
-    return entry - risk * TARGET_RR
+        for _, low in lows_below.sort_values("price", ascending=False).iterrows():
+            tp = float(low["price"])
+            if (entry - tp) / risk >= MIN_ACCEPTABLE_RR:
+                return tp
+    # Dynamiczne TP (Fibo/RR extension) jeśli brakuje struktury
+    return entry - risk * max(TARGET_RR, 1.618)
 
 
 def calculate_trade_levels(zone: dict[str, Any], current_price: float, atr: float, swings: pd.DataFrame) -> dict[str, float]:
