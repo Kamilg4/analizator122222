@@ -687,7 +687,13 @@ def filter_entry_zones_by_width(
     return filtered
 
 
-def build_all_zones(df: pd.DataFrame, swings: pd.DataFrame, trend: str, df_mtf: pd.DataFrame | None = None) -> list[dict[str, Any]]:
+def build_all_zones(
+    df: pd.DataFrame, 
+    swings: pd.DataFrame, 
+    trend: str, 
+    df_mtf: pd.DataFrame | None = None,
+    mtf_swings: pd.DataFrame | None = None
+) -> list[dict[str, Any]]:
     atr = float(df["atr"].iloc[-1]) if "atr" in df.columns else float((df["high"] - df["low"]).tail(14).mean())
     current_price = float(df["close"].iloc[-1])
 
@@ -703,39 +709,41 @@ def build_all_zones(df: pd.DataFrame, swings: pd.DataFrame, trend: str, df_mtf: 
 
     if df_mtf is not None and not df_mtf.empty:
         # Budujemy proste strefy wsparcia/oporu z wykresu MTF i nakładamy z najwyższą wagą
-        from .pivots import detect_pivots, build_swings
-        mtf_pivots = detect_pivots(df_mtf, left=3, right=3)
-        mtf_swings = build_swings(mtf_pivots, min_move_pct=1.0)
-        
-        mtf_atr = float(df_mtf["atr"].iloc[-1]) if "atr" in df_mtf.columns else float((df_mtf["high"] - df_mtf["low"]).tail(14).mean())
-        tolerance = mtf_atr * 0.20
-        
-        recent_mtf_lows = mtf_swings[mtf_swings["type"] == "low"].tail(5)
-        recent_mtf_highs = mtf_swings[mtf_swings["type"] == "high"].tail(5)
-        
-        for row in recent_mtf_lows.itertuples():
-            add_zone(
-                zones,
-                direction="buy",
-                zone_type="Strefa MTF (Wyższy Interwał)",
-                low=float(row.price) - tolerance,
-                high=float(row.price) + tolerance,
-                source="HTF/HIST", # Silne źródło z configu
-                strength=10, # MTF ma najwyższy priorytet
-                note="Kluczowa strefa wsparcia z wyższego interwału czasowego.",
-            )
+        if mtf_swings is None:
+            from .pivots import detect_pivots, build_swings
+            mtf_pivots = detect_pivots(df_mtf, left=3, right=3)
+            mtf_swings = build_swings(mtf_pivots, min_move_pct=1.0)
             
-        for row in recent_mtf_highs.itertuples():
-            add_zone(
-                zones,
-                direction="sell",
-                zone_type="Strefa MTF (Wyższy Interwał)",
-                low=float(row.price) - tolerance,
-                high=float(row.price) + tolerance,
-                source="HTF/HIST", # Silne źródło z configu
-                strength=10, # MTF ma najwyższy priorytet
-                note="Kluczowa strefa oporu z wyższego interwału czasowego.",
-            )
+        if not mtf_swings.empty:
+            mtf_atr = float(df_mtf["atr"].iloc[-1]) if "atr" in df_mtf.columns else float((df_mtf["high"] - df_mtf["low"]).tail(14).mean())
+            tolerance = mtf_atr * 0.20
+            
+            recent_mtf_lows = mtf_swings[mtf_swings["type"] == "low"].tail(5)
+            recent_mtf_highs = mtf_swings[mtf_swings["type"] == "high"].tail(5)
+        
+            for row in recent_mtf_lows.itertuples():
+                add_zone(
+                    zones,
+                    direction="buy",
+                    zone_type="Strefa MTF (Wyższy Interwał)",
+                    low=float(row.price) - tolerance,
+                    high=float(row.price) + tolerance,
+                    source="HTF/HIST", # Silne źródło z configu
+                    strength=10, # MTF ma najwyższy priorytet
+                    note="Kluczowa strefa wsparcia z wyższego interwału czasowego.",
+                )
+                
+            for row in recent_mtf_highs.itertuples():
+                add_zone(
+                    zones,
+                    direction="sell",
+                    zone_type="Strefa MTF (Wyższy Interwał)",
+                    low=float(row.price) - tolerance,
+                    high=float(row.price) + tolerance,
+                    source="HTF/HIST", # Silne źródło z configu
+                    strength=10, # MTF ma najwyższy priorytet
+                    note="Kluczowa strefa oporu z wyższego interwału czasowego.",
+                )
 
     clustered = cluster_nearby_zones(zones, atr)
 
