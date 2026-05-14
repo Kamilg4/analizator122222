@@ -418,17 +418,17 @@ def score_zone(
             quality_score -= 4
             reasons.append("Strefa przeciw trendowi bez lokalnego potwierdzenia: -4.")
 
-    # Dystans nie może zabić dobrej strefy strategicznej, ale ekstremalnie dalekie obszary
-    # nie powinny wypychać bardziej użytecznych stref.
-    if distance_pct > 90:
-        quality_score -= 5
-        reasons.append(f"Strefa ekstremalnie daleko od ceny ({distance_pct:.1f}%): -5.")
-    elif distance_pct > 60:
+    # Dystans. Ekstremalnie dalekie obszary ("lata świetlne od ceny")
+    # powinny otrzymywać karę, aby nie zalewać głównego rankingu.
+    if distance_pct > 80:
+        quality_score -= 15
+        reasons.append(f"Strefa ekstremalnie daleko od ceny ({distance_pct:.1f}%): -15.")
+    elif distance_pct > 40:
+        quality_score -= 8
+        reasons.append(f"Strefa bardzo daleko od ceny ({distance_pct:.1f}%): -8.")
+    elif distance_pct > 20:
         quality_score -= 3
-        reasons.append(f"Strefa bardzo daleko od ceny ({distance_pct:.1f}%): -3.")
-    elif distance_pct > 35:
-        quality_score -= 1
-        reasons.append(f"Strefa dalsza, ale nadal strategiczna ({distance_pct:.1f}%): -1.")
+        reasons.append(f"Strefa zauważalnie oddalona ({distance_pct:.1f}%): -3.")
 
     quality_score = max(int(quality_score), 0)
 
@@ -656,19 +656,20 @@ def evaluate_zones(
     result = pd.DataFrame(rows)
     result = _apply_conflict_penalties(result)
 
-    # Ranking jakościowy: top ma być rzetelny, nie tylko "najbliższy kursowi".
-    # Odrzucone strefy lądują na końcu, konflikty są niżej przez karę jakości.
+    # Ranking: najważniejsza jest faktyczna jakość strefy i jej score!
+    # Przestajemy faworyzować strefę "AKTYWNĄ" tylko dlatego, że cena tam jest.
+    # Odrzucone strefy (OBSERWACJA, ODRZUCONA) wciąż spadają na koniec tabeli.
     class_priority = {
         "AKTYWNA": 0,
-        "W ZASIĘGU": 1,
-        "STRATEGICZNA": 2,
+        "W ZASIĘGU": 0,
+        "STRATEGICZNA": 0,
         "OBSERWACJA": 8,
         "ODRZUCONA": 9,
     }
     result["entry_class_priority"] = result["entry_class"].map(class_priority).fillna(9).astype(int)
 
     return result.sort_values(
-        ["entry_class_priority", "quality_score", "setup_score", "score", "width_pct", "distance_pct"],
+        ["entry_class_priority", "score", "quality_score", "setup_score", "distance_pct", "width_pct"],
         ascending=[True, False, False, False, True, True],
     ).reset_index(drop=True)
 
