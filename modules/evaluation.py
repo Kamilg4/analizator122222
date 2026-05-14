@@ -21,12 +21,12 @@ from .config import (
 # Źródła nie są równoważne. Najmocniejsze są te, które opisują większy kontekst,
 # płynność i realną strefę reakcji, a nie tylko lokalny pomocniczy filtr.
 SOURCE_WEIGHTS: dict[str, int] = {
-    "HTF/HIST": 8,
     "PIVOT_CLUSTER": 7,
+    "HTF/HIST": 5, # Obniżono z 8 na 5 wg wniosków z backtestu
     "OB/LBM": 5,
     "1:1": 4,
+    "FIBO": 4,     # Podniesiono z 2 na 4 wg wniosków z backtestu
     "FTR": 3,
-    "FIBO": 2,
     "S/R": 2,
     "FVG": 1,
 }
@@ -107,10 +107,19 @@ def source_quality_bonus(zone: dict[str, Any]) -> tuple[int, list[str], set[str]
 
     # Konfluencja różnych technik ma znaczenie, ale sama liczba źródeł
     # nie może bez końca pompować score.
-    if len(sources) >= 2:
-        multi_bonus = min(len(sources) - 1, 4)
+    # Backtest wykazał: optimum to 3-5 źródeł. Powyżej 5 brak premii, powyżej 7 kara.
+    n_sources = len(sources)
+    if 2 <= n_sources <= 5:
+        multi_bonus = min(n_sources - 1, 4)
         bonus += multi_bonus
-        reasons.append(f"Konfluencja {len(sources)} źródeł: +{multi_bonus}.")
+        reasons.append(f"Konfluencja {n_sources} źródeł (optimum 3-5): +{multi_bonus}.")
+    elif n_sources == 6:
+        # Brak dodatkowej premii — plateau
+        reasons.append(f"Konfluencja {n_sources} źródeł — brak dodatkowej premii (plateau).")
+    elif n_sources >= 7:
+        # Lekka kara — zbyt rozbudowany, potencjalnie chaotyczny klaster
+        bonus -= 2
+        reasons.append(f"Przeładowany klaster ({n_sources} źródeł) — kara: -2.")
 
     return bonus, reasons, sources
 
@@ -331,6 +340,20 @@ def score_zone(
         quality_score += 2
         reasons.append(f"Mocna kotwica ({', '.join(sorted(strong_sources))}): +2.")
 
+    # Złote klastry - bonusy według analizy backtestu
+    if "FIBO" in sources and "PIVOT_CLUSTER" in sources:
+        quality_score += 3
+        reasons.append("Złoty klaster (FIBO + PIVOT_CLUSTER): +3.")
+    if "FIBO" in sources and "HTF/HIST" in sources:
+        quality_score += 3
+        reasons.append("Złoty klaster (FIBO + HTF/HIST): +3.")
+    if "1:1" in sources and "PIVOT_CLUSTER" in sources:
+        quality_score += 3
+        reasons.append("Złoty klaster (1:1 + PIVOT_CLUSTER): +3.")
+    if "1:1" in sources and "OB/LBM" in sources:
+        quality_score += 3
+        reasons.append("Złoty klaster (1:1 + OB/LBM): +3.")
+
     # FVG/Fibo/SR/FTR same z siebie są za słabe jako gwiazda rankingu.
     if standalone_weak:
         quality_score -= 7
@@ -396,27 +419,45 @@ def score_zone(
         quality_score -= 2
         reasons.append("Strefa testowana 2 razy — ostrożniej: -2.")
     elif freshness == "ZUŻYTA":
-        quality_score -= 6
-        reasons.append(f"Strefa wielokrotnie testowana ({touch_count} wejść): -6.")
+        quality_score -= 5
+        reasons.append(f"Strefa wielokrotnie testowana ZUŻYTA ({touch_count} wejść): -5.")
 
     if invalidated:
         quality_score -= 25
         reasons.append("Strefa zanegowana dwoma zamknięciami poza zakresem: -25.")
 
     # Trend ma znaczenie. Przeciwtrendowe BUY/SELL bez potwierdzeń mają być niżej.
+    # Backtest wykazał: SELL jest systemowo słaby (-0.123R). BUY w trendzie wzrostowym
+    # i nieczytelnym działa dobrze. SELL wymaga surowego filtrowania.
     if trend == "wzrostowy" and direction == "buy":
-        quality_score += 2
-        reasons.append("Zgodność z trendem wzrostowym: +2.")
+        quality_score += 3
+        reasons.append("Zgodność z trendem wzrostowym (potwierdzona przewaga): +3.")
     elif trend == "spadkowy" and direction == "sell":
-        quality_score += 2
-        reasons.append("Zgodność z trendem spadkowym: +2.")
-    elif trend in {"wzrostowy", "spadkowy"}:
+        quality_score += 1
+        reasons.append("Zgodność z trendem spadkowym (SELL nadal ryzykowny): +1.")
+    elif trend == "wzrostowy" and direction == "sell":
+        quality_score -= 15
+        reasons.append("SELL na trendzie wzrostowym — backtest potwierdza bardzo słabe wyniki: -15.")
+    elif trend == "nieczytelny" and direction == "sell":
+        quality_score -= 8
+        reasons.append("SELL przy nieczytelnym trendzie — brak potwierdzenia spadków: -8.")
+    elif trend == "spadkowy" and direction == "buy":
         if has_local_confirmation:
             quality_score -= 1
-            reasons.append("Strefa przeciw trendowi, ale ma lokalne potwierdzenie: -1.")
+            reasons.append("Strefa BUY przeciw trendowi spadkowemu, ale ma potwierdzenie: -1.")
         else:
             quality_score -= 4
-            reasons.append("Strefa przeciw trendowi bez lokalnego potwierdzenia: -4.")
+            reasons.append("Strefa BUY przeciw trendowi bez potwierdzenia: -4.")
+
+    # Dodatkowy filtr SELL: backtest wykazał, że SELL wymaga silniejszych konfluencji.
+    # SELL bez co najmniej 1 mocnej kotwicy jest praktycznie bezwartościowy.
+    if direction == "sell":
+        if not strong_sources:
+            quality_score -= 8
+            reasons.append("SELL bez żadnej mocnej kotwicy — backtest potwierdza nieskuteczność: -8.")
+        elif len(strong_sources) < 2:
+            quality_score -= 3
+            reasons.append("SELL z tylko 1 mocną kotwicą — wymaga ostrożności: -3.")
 
     # Dystans. Ekstremalnie dalekie obszary ("lata świetlne od ceny")
     # powinny otrzymywać karę, aby nie zalewać głównego rankingu.
@@ -438,8 +479,8 @@ def score_zone(
     setup_score = 0
 
     if status["in_zone"]:
-        setup_score += 3
-        reasons.append("Cena jest już w strefie: setup +3.")
+        # Zniesiono premię +3 za sam fakt siedzenia w strefie, w zamian tylko ocena potwierdzeń
+        pass
     elif status["near"]:
         setup_score += 2
         reasons.append("Cena jest blisko strefy: setup +2.")
@@ -472,14 +513,15 @@ def score_zone(
 
         rr = float(trade_levels.get("rr", 0.0))
         if rr >= 3:
-            setup_score += 3
-            reasons.append("R:R >= 3 przy aktywnej strefie: setup +3.")
+            setup_score += 5
+            reasons.append("R:R >= 3 przy aktywnej strefie — świetne: setup +5.")
         elif rr >= TARGET_RR:
-            setup_score += 2
-            reasons.append("R:R spełnia warunek ok. 1:2: setup +2.")
+            setup_score += 3
+            reasons.append("R:R spełnia pełny warunek ~1:2 — backtest potwierdza przewagę: setup +3.")
         elif rr >= MIN_ACCEPTABLE_RR:
-            setup_score += 1
-            reasons.append("R:R jest blisko 1:2 i mieści się w tolerancji: setup +1.")
+            # Backtest: tolerowane R:R daje ~0R expectancy, brak premii
+            setup_score += 0
+            reasons.append("R:R blisko 1:2 (tolerancja) — backtest nie potwierdza przewagi: setup +0.")
         else:
             setup_score -= 4
             reasons.append(f"R:R {rr:.2f} poniżej wymaganego ~1:2: setup -4.")
@@ -560,11 +602,14 @@ def _apply_conflict_penalties(result: pd.DataFrame) -> pd.DataFrame:
             opposite = str(row_i["direction"]) != str(row_j["direction"])
             overlap = zone_overlap_ratio(row_i, row_j)
 
-            if opposite and overlap >= 0.35:
-                result.at[result.index[i], "conflict"] = True
-                result.at[result.index[j], "conflict"] = True
-                result.at[result.index[i], "conflict_count"] = int(result.at[result.index[i], "conflict_count"]) + 1
-                result.at[result.index[j], "conflict_count"] = int(result.at[result.index[j], "conflict_count"]) + 1
+            # Złagodzenie konfliktu: zgłaszamy tylko gigantyczne pokrycie (>= 80%) i podobną moc stref
+            if opposite and overlap >= 0.80:
+                # Sprawdzamy czy punkty jakości są podobne
+                if abs(float(row_i["quality_score"]) - float(row_j["quality_score"])) <= 5:
+                    result.at[result.index[i], "conflict"] = True
+                    result.at[result.index[j], "conflict"] = True
+                    result.at[result.index[i], "conflict_count"] = int(result.at[result.index[i], "conflict_count"]) + 1
+                    result.at[result.index[j], "conflict_count"] = int(result.at[result.index[j], "conflict_count"]) + 1
 
     conflict_mask = result["conflict"] == True
     if bool(conflict_mask.any()):
