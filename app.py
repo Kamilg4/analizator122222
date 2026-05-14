@@ -9,6 +9,8 @@ from modules.config import (
     TARGET_RR,
     READABLE_CHART_MAX_ZONES,
     DIAGNOSTIC_CHART_MAX_ZONES,
+    POPULAR_STOCKS,
+    POPULAR_CRYPTO,
 )
 
 # Importy modułów
@@ -198,14 +200,33 @@ def main() -> None:
         source = st.selectbox("Rynek", ["Akcje / ETF", "Krypto"], index=0)
 
         if source == "Akcje / ETF":
-            ticker = st.text_input("Ticker", "NKE").upper().strip()
-            exchange_id = ""
-            st.caption(
-                "Przykłady: NKE, TTWO, AAPL, MSFT, ADS.DE, RHM.DE, 11B.WA, PKN.WA. "
-                "Możesz wpisać ORLEN — aplikacja zamieni to na PKN.WA."
+            stock_options = ["Wpisz własny ticker..."] + list(POPULAR_STOCKS.keys())
+            selected_stock = st.selectbox(
+                "Wybierz instrument", 
+                stock_options,
+                format_func=lambda x: f"{x} - {POPULAR_STOCKS[x]}" if x in POPULAR_STOCKS else x
             )
+            
+            if selected_stock == "Wpisz własny ticker...":
+                ticker = st.text_input("Własny Ticker", "NKE").upper().strip()
+            else:
+                ticker = selected_stock
+                
+            exchange_id = ""
+            st.caption("Używamy natywnych tickerów np. AAPL, TTWO, SPY, PKN.WA.")
         else:
-            ticker = st.text_input("Para krypto", "BTC/USDT").upper().strip()
+            crypto_options = ["Wpisz własny ticker..."] + list(POPULAR_CRYPTO.keys())
+            selected_crypto = st.selectbox(
+                "Wybierz instrument krypto", 
+                crypto_options,
+                format_func=lambda x: f"{x} - {POPULAR_CRYPTO[x]}" if x in POPULAR_CRYPTO else x
+            )
+            
+            if selected_crypto == "Wpisz własny ticker...":
+                ticker = st.text_input("Własny Ticker", "BTC/USDT").upper().strip()
+            else:
+                ticker = selected_crypto
+
             exchange_id = st.selectbox(
                 "Źródło danych krypto",
                 ["yahoo", "kraken", "coinbase", "binance", "bybit", "okx"],
@@ -219,10 +240,7 @@ def main() -> None:
                     "okx": "OKX przez CCXT",
                 }[value],
             )
-            st.caption(
-                "Domyślnie używaj Yahoo Finance. Wpisy BTC/USDT, ETH/USDT i SOL/USDT "
-                "są automatycznie zamieniane na BTC-USD, ETH-USD i SOL-USD."
-            )
+            st.caption("Domyślnie używaj Yahoo Finance.")
 
         timeframe = st.selectbox("Interwał", ["15m", "1h", "4h", "1d", "1wk"], index=3)
         limit = st.slider("Liczba świec", min_value=100, max_value=5000, value=2500, step=50)
@@ -252,16 +270,25 @@ def main() -> None:
             max_zones_on_chart = READABLE_CHART_MAX_ZONES
             st.caption("Tryb czytelny pokazuje wyłącznie główną strefę decyzyjną oraz — jeśli istnieje — jedną głębszą alternatywę.")
 
-        st.subheader("Parametry struktury")
-        pivot_left = st.slider("Pivot — świece z lewej", min_value=2, max_value=25, value=3)
-        pivot_right = st.slider("Pivot — świece z prawej", min_value=2, max_value=25, value=3)
-        min_move_pct = st.slider("Minimalny ruch swingowy (%)", min_value=0.1, max_value=20.0, value=1.0, step=0.1)
+        # Dynamiczne ustawienia domyślne zależne od interwału
+        if timeframe in ["1d", "1wk"]:
+            def_pivot = 3
+            def_min_move = 1.5
+        elif timeframe == "4h":
+            def_pivot = 4
+            def_min_move = 0.8
+        else: # 1h, 15m
+            def_pivot = 5
+            def_min_move = 0.3
 
-        st.subheader("Parametry trendu")
-        trend_points = st.slider("Trend — ile ostatnich szczytów/dołków sprawdzać", min_value=3, max_value=8, value=4)
-        min_trend_score = st.slider("Trend — minimalna zgodność kierunku", min_value=0.50, max_value=1.00, value=0.67, step=0.01)
+        with st.expander("⚙️ Zaawansowane parametry analizy"):
+            pivot_left = st.slider("Pivot (lewa strona)", min_value=2, max_value=20, value=def_pivot)
+            pivot_right = st.slider("Pivot (prawa strona)", min_value=2, max_value=20, value=def_pivot)
+            min_move_pct = st.slider("Minimalny ruch swingowy (%)", min_value=0.1, max_value=10.0, value=def_min_move, step=0.1)
+            trend_points = st.slider("Trend — ile ostatnich szczytów/dołków sprawdzać", min_value=3, max_value=8, value=4)
+            min_trend_score = st.slider("Trend — minimalna zgodność kierunku", min_value=0.50, max_value=1.00, value=0.67, step=0.01)
 
-        analyze_button = st.button("Analizuj")
+        analyze_button = st.button("Analizuj", type="primary")
 
     current_analysis_params = _analysis_params_signature(
         source,
@@ -340,11 +367,13 @@ def main() -> None:
     # PODSUMOWANIE
     # =========================
     st.subheader("1. Podsumowanie rynku")
+    
+    instrument_name = POPULAR_STOCKS.get(ticker, POPULAR_CRYPTO.get(ticker, ticker))
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-        st.metric("Symbol", ticker)
+        st.metric("Instrument", instrument_name)
 
     with col2:
         st.metric("Interwał", timeframe)
@@ -524,7 +553,7 @@ def main() -> None:
         "Kody B1/B2/S1/S2 nadal odpowiadają tabeli rankingu."
     )
 
-    chart_title = f"{ticker} — {timeframe} — struktura, OVB, BOS i strefy"
+    chart_title = f"{instrument_name} ({ticker}) — {timeframe} — struktura, OVB, BOS i strefy"
     fig = make_chart(
         df,
         swings,
