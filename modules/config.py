@@ -9,16 +9,46 @@ DEFAULT_RSI_PERIOD = 14
 DEFAULT_ATR_PERIOD = 14
 
 # Wersja patcha
-APP_VERSION = "2026-05-13-v9-trend-glowny-lokalny-i-filtr-korekty"
+APP_VERSION = "2026-05-14-v10-optymalizacja-wynikow"
 
 # Ranking główny — pokazujemy tylko kilka najbardziej użytecznych kandydatów.
 TOP_ZONES_TO_DISPLAY = 5
 
 # Warunek opłacalności setupu.
-# Użytkownik chciał układ mniej więcej 1:2. Zostawiamy niewielką tolerancję,
-# bo TP/SL są liczone z danych świecowych i mogą nie wypaść co do grosza.
-MIN_ACCEPTABLE_RR = 1.80
-TARGET_RR = 2.00
+# Obniżony po analizie statystyk MFE (średnie Max Favorable Excursion wynosiło 1.12R).
+MIN_ACCEPTABLE_RR = 1.30
+TARGET_RR = 1.618
+
+# Słowniki Tickerów do UI
+POPULAR_STOCKS = {
+    "SPY": "SPDR S&P 500 ETF",
+    "QQQ": "Invesco QQQ Trust",
+    "AAPL": "Apple Inc.",
+    "MSFT": "Microsoft Corp.",
+    "NVDA": "NVIDIA Corp.",
+    "NKE": "Nike Inc.",
+    "TTWO": "Take-Two Interactive",
+    "TSLA": "Tesla Inc.",
+    "AMZN": "Amazon.com Inc.",
+    "META": "Meta Platforms Inc.",
+    "GOOGL": "Alphabet Inc.",
+    "PKN.WA": "ORLEN S.A.",
+    "PKO.WA": "PKO Bank Polski",
+    "ALE.WA": "Allegro.eu",
+    "DNP.WA": "Dino Polska",
+    "CDR.WA": "CD Projekt",
+}
+
+POPULAR_CRYPTO = {
+    "BTC/USDT": "Bitcoin",
+    "ETH/USDT": "Ethereum",
+    "SOL/USDT": "Solana",
+    "XRP/USDT": "Ripple",
+    "ADA/USDT": "Cardano",
+    "DOGE/USDT": "Dogecoin",
+    "DOT/USDT": "Polkadot",
+    "LINK/USDT": "Chainlink",
+}
 
 # Czytelny wykres ma z założenia pokazywać mało stref.
 # Widok główny ma pomagać podjąć decyzję, a nie prezentować pełną mapę wszystkich możliwych stref.
