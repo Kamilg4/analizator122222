@@ -24,6 +24,7 @@ from modules.zones import build_all_zones
 from modules.evaluation import evaluate_zones, select_top_zones, select_active_zones, select_strategic_zones, select_chart_zones
 from modules.elliott import detect_elliott_scenario
 from modules.chart import make_chart
+from modules.analysis import fetch_and_analyze
 
 
 def _fmt_num(value: object, decimals: int = 2) -> str:
@@ -81,73 +82,16 @@ def _run_full_analysis(
     min_trend_score: float,
 ) -> dict:
     """Wykonuje pełną analizę i zwraca komplet danych do renderowania UI."""
-    df = fetch_ohlcv(source, ticker, exchange_id, timeframe, limit)
-    df = add_indicators(df)
-
-    # Pobieranie danych MTF
-    mtf_timeframe = get_mtf_timeframe(timeframe)
-    df_mtf = None
-    if mtf_timeframe:
-        try:
-            # Dla MTF pobieramy mniej świec, np. 1000, bo i tak reprezentują bardzo szeroki kontekst
-            df_mtf = fetch_ohlcv(source, ticker, exchange_id, mtf_timeframe, limit=min(limit, 1000))
-            df_mtf = add_indicators(df_mtf)
-        except Exception:
-            df_mtf = None
-
-    pivots = detect_pivots(df, left=pivot_left, right=pivot_right)
-    swings = build_swings(pivots, min_move_pct=min_move_pct)
-    structural_trend_context = analyze_trend_structure(
-        swings,
-        local_points_to_check=trend_points,
-        min_score=min_trend_score,
+    return fetch_and_analyze(
+        source, ticker, exchange_id, timeframe, limit,
+        pivot_left=pivot_left,
+        pivot_right=pivot_right,
+        min_move_pct=min_move_pct,
+        trend_points=trend_points,
+        min_trend_score=min_trend_score,
+        include_elliott=True,
+        top_zones_n=TOP_ZONES_TO_DISPLAY,
     )
-    change_reference_trend = get_change_reference_trend(structural_trend_context)
-
-    # OVB/BOS/3x zmiana trendu są liczone względem trendu głównego,
-    # a nie automatycznie względem ostatniego lokalnego odbicia.
-    ovb_result = calculate_ovb(swings, change_reference_trend, df.iloc[-1])
-    bos_result = calculate_bos(swings, change_reference_trend, df.iloc[-1])
-    opposite_structure = check_opposite_structure(swings, change_reference_trend)
-    trend_change_summary = build_trend_change_summary(ovb_result, bos_result, opposite_structure)
-
-    trend_context = finalize_trend_context(structural_trend_context, trend_change_summary)
-    trend = trend_context["effective_trend"]
-    trend_scores = trend_context["local_scores"]
-
-    candle_patterns = detect_recent_candle_patterns(df)
-    rsi_signal = get_rsi_signal(df)
-    rsi_divergence = detect_rsi_divergence(df, swings)
-    elliott = detect_elliott_scenario(swings, trend)
-
-    zones = build_all_zones(df, swings, trend, df_mtf=df_mtf)
-    zones_df = evaluate_zones(zones, df, swings, trend, candle_patterns, rsi_signal, rsi_divergence)
-    top_zones_df = select_top_zones(zones_df, top_n=TOP_ZONES_TO_DISPLAY)
-    active_zones_df = select_active_zones(zones_df, top_n=3)
-    strategic_zones_df = select_strategic_zones(zones_df, top_n=3)
-
-    return {
-        "df": df,
-        "pivots": pivots,
-        "swings": swings,
-        "trend_scores": trend_scores,
-        "trend_context": trend_context,
-        "change_reference_trend": change_reference_trend,
-        "trend": trend,
-        "ovb_result": ovb_result,
-        "bos_result": bos_result,
-        "opposite_structure": opposite_structure,
-        "trend_change_summary": trend_change_summary,
-        "candle_patterns": candle_patterns,
-        "rsi_signal": rsi_signal,
-        "rsi_divergence": rsi_divergence,
-        "elliott": elliott,
-        "zones": zones,
-        "zones_df": zones_df,
-        "top_zones_df": top_zones_df,
-        "active_zones_df": active_zones_df,
-        "strategic_zones_df": strategic_zones_df,
-    }
 
 
 def _analysis_params_signature(
