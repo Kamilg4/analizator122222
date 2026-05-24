@@ -188,10 +188,10 @@ def build_support_resistance_zones(swings: pd.DataFrame, atr: float) -> list[dic
     if swings.empty:
         return zones
 
-    # Bierzemy więcej swingów, żeby złapać także starsze wsparcia/opory,
-    # a nie tylko ostatnie 4 punkty struktury.
-    recent_lows = swings[swings["type"] == "low"].tail(12)
-    recent_highs = swings[swings["type"] == "high"].tail(12)
+    # Redukcja szumu: tail(6) zamiast tail(12) — mniejsza liczba słabych S/R
+    # zmniejsza pompowanie sources_count w klastrach.
+    recent_lows = swings[swings["type"] == "low"].tail(6)
+    recent_highs = swings[swings["type"] == "high"].tail(6)
 
     for _, row in recent_lows.iterrows():
         add_zone(
@@ -284,7 +284,7 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
     for i in range(3, len(data) - 5):
         candle = data.iloc[i]
         future = data.iloc[i + 1 : i + 6]
-        previous = data.iloc[max(0, i - 10) : i]
+        previous = data.iloc[max(0, i - 15) : i]  # Zaostrzenie: 15 świec zamiast 10
 
         body = candle_body(candle)
         if body <= 0:
@@ -294,7 +294,8 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
         if candle_direction(candle) == "bearish":
             future_break = float(future["high"].max()) > float(previous["high"].max()) if not previous.empty else False
             future_move = float(future["high"].max() - candle["low"])
-            if future_break and future_move >= atr:
+            # Zaostrzenie: impulse >= 1.5×ATR (było 1×ATR) — mniej słabych OB
+            if future_break and future_move >= atr * 1.5:
                 has_volume = "volume" in df.columns and "volume_ma" in df.columns
                 future_vol_max = float(future["volume"].max()) if has_volume else 0.0
                 candle_vol_ma = float(candle["volume_ma"]) if has_volume else 0.0
@@ -314,7 +315,8 @@ def build_order_block_zones(df: pd.DataFrame, atr: float, lookback: int = 300) -
         if candle_direction(candle) == "bullish":
             future_break = float(future["low"].min()) < float(previous["low"].min()) if not previous.empty else False
             future_move = float(candle["high"] - future["low"].min())
-            if future_break and future_move >= atr:
+            # Zaostrzenie: impulse >= 1.5×ATR (było 1×ATR) — mniej słabych OB
+            if future_break and future_move >= atr * 1.5:
                 has_volume = "volume" in df.columns and "volume_ma" in df.columns
                 future_vol_max = float(future["volume"].max()) if has_volume else 0.0
                 candle_vol_ma = float(candle["volume_ma"]) if has_volume else 0.0
