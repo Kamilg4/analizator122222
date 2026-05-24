@@ -8,6 +8,7 @@ import numpy as np
 from .zones import zone_mid
 from .config import (
     MIN_ACCEPTABLE_RR,
+    SELL_MIN_ACCEPTABLE_RR,
     TARGET_RR,
     READABLE_CHART_MAX_OVERLAP_RATIO,
     READABLE_CHART_MAX_DISTANCE_PCT,
@@ -95,7 +96,7 @@ def get_zone_status(zone: dict[str, Any], current_price: float, atr: float) -> d
     }
 
 
-def source_quality_bonus(zone: dict[str, Any]) -> tuple[int, list[str], set[str]]:
+def source_quality_bonus(zone: dict[str, Any], direction: str = "") -> tuple[int, list[str], set[str]]:
     """Liczy jakość źródeł i zwraca także komplet źródeł."""
     sources = parse_sources(str(zone.get("source", "")))
     weighted = sum(SOURCE_WEIGHTS.get(source, 0) for source in sources)
@@ -107,7 +108,9 @@ def source_quality_bonus(zone: dict[str, Any]) -> tuple[int, list[str], set[str]
 
     # Konfluencja różnych technik ma znaczenie, ale sama liczba źródeł
     # nie może bez końca pompować score.
-    # Backtest wykazał: optimum to 3-5 źródeł. Powyżej 5 brak premii, powyżej 7 kara.
+    # Backtest 18-instr. wykazał: optimum to 3-5 źródeł.
+    # 8+ słabe globalnie (BUY ~0R, SELL ~0R).
+    # 7 źródeł: BUY +0.233R (świetny), SELL -0.277R (katastrofalny) → kara tylko SELL.
     n_sources = len(sources)
     if 2 <= n_sources <= 5:
         multi_bonus = min(n_sources - 1, 4)
@@ -116,10 +119,15 @@ def source_quality_bonus(zone: dict[str, Any]) -> tuple[int, list[str], set[str]
     elif n_sources == 6:
         # Brak dodatkowej premii — plateau
         reasons.append(f"Konfluencja {n_sources} źródeł — brak dodatkowej premii (plateau).")
-    elif n_sources >= 7:
-        # Lekka kara — zbyt rozbudowany, potencjalnie chaotyczny klaster
-        bonus -= 2
-        reasons.append(f"Przeładowany klaster ({n_sources} źródeł) — kara: -2.")
+    elif n_sources == 7:
+        if direction == "sell":
+            bonus -= 3
+            reasons.append(f"Przeładowany klaster SELL ({n_sources} źródeł) — kara: -3.")
+        else:
+            reasons.append(f"Klaster {n_sources} źródeł — BUY bez kary (backtest: BUY@7 = +0.233R).")
+    elif n_sources >= 8:
+        bonus -= 3
+        reasons.append(f"Przeładowany klaster ({n_sources} źródeł) — kara globalna: -3.")
 
     return bonus, reasons, sources
 
@@ -258,7 +266,9 @@ def calculate_trade_levels(zone: dict[str, Any], current_price: float, atr: floa
 
     rr = reward / risk if risk > 0 else 0.0
 
-    rr_ok = rr >= MIN_ACCEPTABLE_RR
+    # Asymetryczny R:R — SELL wymaga wyższego R:R (niższy win rate, gorsze MFE)
+    min_rr = SELL_MIN_ACCEPTABLE_RR if direction == "sell" else MIN_ACCEPTABLE_RR
+    rr_ok = rr >= min_rr
     if rr >= TARGET_RR:
         rr_status = "SPEŁNIA ~1:2"
     elif rr_ok:
@@ -302,6 +312,7 @@ def score_zone(
     rsi_divergence: dict[str, Any],
     trade_levels: dict[str, float],
     history: dict[str, Any],
+    trend_change_score: int = 0,
 ) -> dict[str, Any]:
     """
     Ocena strefy rozdzielona na:
@@ -313,7 +324,7 @@ def score_zone(
     """
     reasons: list[str] = []
     status = get_zone_status(zone, current_price, atr)
-    source_bonus, source_reasons, sources = source_quality_bonus(zone)
+    source_bonus, source_reasons, sources = source_quality_bonus(zone, direction=str(zone["direction"]).lower())
     meta = zone.get("meta", {}) or {}
 
     width_pct = float(status["width_pct"])
@@ -340,19 +351,21 @@ def score_zone(
         quality_score += 2
         reasons.append(f"Mocna kotwica ({', '.join(sorted(strong_sources))}): +2.")
 
-    # Złote klastry - bonusy według analizy backtestu
-    if "FIBO" in sources and "PIVOT_CLUSTER" in sources:
-        quality_score += 3
-        reasons.append("Złoty klaster (FIBO + PIVOT_CLUSTER): +3.")
-    if "FIBO" in sources and "HTF/HIST" in sources:
-        quality_score += 3
-        reasons.append("Złoty klaster (FIBO + HTF/HIST): +3.")
-    if "1:1" in sources and "PIVOT_CLUSTER" in sources:
-        quality_score += 3
-        reasons.append("Złoty klaster (1:1 + PIVOT_CLUSTER): +3.")
-    if "1:1" in sources and "OB/LBM" in sources:
-        quality_score += 3
-        reasons.append("Złoty klaster (1:1 + OB/LBM): +3.")
+    # Złote klastry — bonusy WYŁĄCZONE po backteście 18-instr.
+    # Wszystkie 4 pary miały expectancy poniżej benchmarku (+0.120R):
+    #   FIBO+PIVOT_CLUSTER: +0.059R, FIBO+HTF/HIST: +0.076R,
+    #   1:1+PIVOT_CLUSTER: +0.009R, 1:1+OB/LBM: +0.057R.
+    # 97% stref ze score >= 50 zawierało złoty klaster → przepompowywały ranking.
+    # Bonus = 0, ale nadal logujemy obecność jako informację diagnostyczną.
+    _golden_pairs = [
+        ("FIBO", "PIVOT_CLUSTER"),
+        ("FIBO", "HTF/HIST"),
+        ("1:1", "PIVOT_CLUSTER"),
+        ("1:1", "OB/LBM"),
+    ]
+    for _a, _b in _golden_pairs:
+        if _a in sources and _b in sources:
+            reasons.append(f"Złoty klaster ({_a} + {_b}): +0 (bonus wyłączony po backteście).")
 
     # FVG/Fibo/SR/FTR same z siebie są za słabe jako gwiazda rankingu.
     if standalone_weak:
@@ -472,6 +485,22 @@ def score_zone(
         reasons.append(f"Strefa zauważalnie oddalona ({distance_pct:.1f}%): -3.")
 
     quality_score = max(int(quality_score), 0)
+
+    # -------------------------
+    # 1b. TREND CHANGE SCORE — bonus i kara
+    # -------------------------
+    # Backtest 18-instr. wykazał:
+    #   TCS=0: SELL -0.135R (n=323) — wyraźnie ujemny,
+    #   TCS=1: SELL +0.048R — neutralny,
+    #   TCS=2: SELL +0.193R, BUY +0.239R — najlepszy.
+    # Bonus +1 za TCS >= 2 (jak dotychczas).
+    # Nowa kara -3 za SELL przy TCS == 0 — brak potwierdzeń zmiany trendu.
+    if trend_change_score >= 2:
+        quality_score += 1
+        reasons.append(f"Zmiana trendu {trend_change_score}/3 potwierdzona (OVB/BOS): +1.")
+    elif trend_change_score == 0 and direction == "sell":
+        quality_score -= 3
+        reasons.append("SELL bez potwierdzeń zmiany trendu (TCS=0) — backtest: -0.135R na n=323: -3.")
 
     # -------------------------
     # 2. AKTYWNOŚĆ SETUPU
@@ -639,6 +668,7 @@ def evaluate_zones(
     candle_patterns: dict[str, Any],
     rsi_signal: dict[str, Any],
     rsi_divergence: dict[str, Any],
+    trend_change_score: int = 0,
 ) -> pd.DataFrame:
     """Ocenia wszystkie wykryte strefy i zwraca pełny ranking."""
     if not zones:
@@ -662,6 +692,7 @@ def evaluate_zones(
             rsi_divergence,
             levels,
             history,
+            trend_change_score=trend_change_score,
         )
 
         rows.append(
@@ -692,6 +723,8 @@ def evaluate_zones(
                 "rr": levels["rr"],
                 "rr_ok": score_data["rr_ok"],
                 "rr_status": score_data["rr_status"],
+                "trend_effective": trend,
+                "trend_change_score": trend_change_score,
                 "note": zone.get("note", ""),
                 "reasons": " | ".join(score_data["reasons"]),
                 "meta": zone.get("meta", {}),
@@ -763,6 +796,24 @@ def select_top_zones(zones_df: pd.DataFrame, top_n: int = 5, max_overlap_ratio: 
         & (zones_df["rr_ok"] == True)
         & (zones_df["quality_score"] >= 16)
     ].copy()
+
+    # SELL hard gate — SELL wchodzi do top TYLKO jeśli spełnia ≥2 z 3 warunków.
+    # Backtest wykazał: addytywne kary SELL przetasowują ranking i powodują efekty uboczne.
+    # Hard gate blokuje słabe SELL-e bez ruszania score'u BUY.
+    def _sell_passes_hard_gate(row: pd.Series) -> bool:
+        if str(row.get("direction", "")).lower() != "sell":
+            return True  # BUY zawsze przechodzi
+        conditions_met = 0
+        if int(row.get("trend_change_score", 0) or 0) >= 1:
+            conditions_met += 1
+        if int(row.get("strong_sources_count", 0) or 0) >= 2:
+            conditions_met += 1
+        t = str(row.get("trend_effective", "")).lower()
+        if t in ("spadkowy", "nieczytelny"):
+            conditions_met += 1
+        return conditions_met >= 2
+
+    candidates = candidates[candidates.apply(_sell_passes_hard_gate, axis=1)]
 
     # Jeżeli rynek nie daje stref z akceptowalnym R:R, lepiej zwrócić pusty ranking
     # niż udawać, że mamy dobry trade. Pełna tabela nadal pokaże strefy obserwacyjne.
